@@ -28,12 +28,20 @@ export function handlePrefsEvent(type: string, data: { [key: string]: any }) {
         if (el) el.value = v;
       };
       const ADDN = "extensions.askgpt.";
-      set("askgpt-base-input", Zotero.Prefs.get(ADDN + "baseURL") || "https://api.deepseek.com");
+      set(
+        "askgpt-base-input",
+        Zotero.Prefs.get(ADDN + "baseURL") || "https://api.deepseek.com",
+      );
       set("askgpt-key-input", Zotero.Prefs.get(ADDN + "apiKey") || "");
-      set("askgpt-model-input", Zotero.Prefs.get(ADDN + "model") || "deepseek-chat");
+      set(
+        "askgpt-model-input",
+        Zotero.Prefs.get(ADDN + "model") || "deepseek-chat",
+      );
       set("askgpt-temp-input", Zotero.Prefs.get(ADDN + "temperature") ?? 0.3);
       const web = doc.getElementById("askgpt-web-input");
-      if (web) (web as HTMLInputElement).checked = Zotero.Prefs.get(ADDN + "webSearch") !== false;
+      if (web)
+        (web as HTMLInputElement).checked =
+          Zotero.Prefs.get(ADDN + "webSearch") !== false;
     } catch (e) {
       Zotero.logError(new Error("AskGPT prefs load: " + e));
     }

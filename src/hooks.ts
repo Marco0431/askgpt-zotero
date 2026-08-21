@@ -1,7 +1,14 @@
 import { getString, initLocale } from "./utils/locale";
 import { createZToolkit } from "./utils/ztoolkit";
 import { registerPrefs, handlePrefsEvent, savePrefs } from "./modules/prefs";
-import { registerReader, registerToolbar, registerContextMenu, unregisterContextMenu, attachToReader, registerNotifier } from "./modules/reader";
+import {
+  registerReader,
+  registerToolbar,
+  registerContextMenu,
+  unregisterContextMenu,
+  attachToReader,
+  registerNotifier,
+} from "./modules/reader";
 import { openAskPopup, hideAskPopup } from "./modules/popup";
 
 async function onStartup() {
@@ -49,20 +56,28 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   } catch (e) {}
 
   // Ctrl+K 快捷键（主窗口文档级，PDF iframe 内由 reader.ts 挂载）
-  win.document.addEventListener("keydown", (ev: KeyboardEvent) => {
-    const k = ev.key || "";
-    if (k.toLowerCase() !== "k") return;
-    if (!ev.ctrlKey && !ev.metaKey) return;
-    if (ev.shiftKey || ev.altKey) return;
-    const target = ev.target as HTMLElement | null;
-    const tag = (target && target.tagName) || "";
-    if (tag === "INPUT" || tag === "TEXTAREA" || (target && target.isContentEditable)) {
-      return;
-    }
-    ev.preventDefault();
-    ev.stopPropagation();
-    openAskPopup();
-  }, true);
+  win.document.addEventListener(
+    "keydown",
+    (ev: KeyboardEvent) => {
+      const k = ev.key || "";
+      if (k.toLowerCase() !== "k") return;
+      if (!ev.ctrlKey && !ev.metaKey) return;
+      if (ev.shiftKey || ev.altKey) return;
+      const target = ev.target as HTMLElement | null;
+      const tag = (target && target.tagName) || "";
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        (target && target.isContentEditable)
+      ) {
+        return;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      openAskPopup();
+    },
+    true,
+  );
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {

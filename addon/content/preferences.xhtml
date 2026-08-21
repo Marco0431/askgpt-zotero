@@ -1,37 +1,70 @@
 <linkset>
-  <html:link rel="localization" href="__addonRef__-preferences.ftl"/>
+  <html:link rel="localization" href="__addonRef__-preferences.ftl" />
 </linkset>
-<groupbox onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })">
+<groupbox
+  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
+>
   <label><html:h2>API 配置</html:h2></label>
   <description>
-    在 PDF 阅读器顶栏点击 AI 按钮，或选中文字后按 Ctrl+K。接口需兼容 OpenAI 风格 API（如 DeepSeek）。
+    在 PDF 阅读器顶栏点击 AI 按钮，或选中文字后按 Ctrl+K。接口需兼容 OpenAI 风格
+    API（如 DeepSeek）。
   </description>
   <hbox align="center">
     <html:label for="askgpt-base-input">接口地址</html:label>
-    <html:input type="text" id="askgpt-base-input" preference="baseURL" style="width:300px"/>
+    <html:input
+      type="text"
+      id="askgpt-base-input"
+      preference="baseURL"
+      style="width: 300px"
+    />
   </hbox>
   <hbox align="center">
     <html:label for="askgpt-key-input">API Key</html:label>
-    <html:input type="password" id="askgpt-key-input" preference="apiKey" style="width:300px"/>
+    <html:input
+      type="password"
+      id="askgpt-key-input"
+      preference="apiKey"
+      style="width: 300px"
+    />
   </hbox>
   <hbox align="center">
     <html:label for="askgpt-model-input">模型</html:label>
-    <html:input type="text" id="askgpt-model-input" preference="model" style="width:300px"/>
+    <html:input
+      type="text"
+      id="askgpt-model-input"
+      preference="model"
+      style="width: 300px"
+    />
   </hbox>
   <hbox align="center">
     <html:label for="askgpt-temp-input">温度 (0~2)</html:label>
-    <html:input type="number" id="askgpt-temp-input" preference="temperature" style="width:300px"/>
+    <html:input
+      type="number"
+      id="askgpt-temp-input"
+      preference="temperature"
+      style="width: 300px"
+    />
   </hbox>
   <hbox align="center">
     <html:label for="askgpt-web-input">允许联网搜索</html:label>
-    <checkbox id="askgpt-web-input" preference="webSearch" native="true"/>
+    <checkbox id="askgpt-web-input" preference="webSearch" native="true" />
   </hbox>
 </groupbox>
 <vbox>
   <label><html:h2>系统提示词（agent 风格，可自定义）</html:h2></label>
-  <html:textarea id="askgpt-sys-input" preference="systemPrompt" rows="8" style="width:100%"/>
+  <html:textarea
+    id="askgpt-sys-input"
+    preference="systemPrompt"
+    rows="8"
+    style="width: 100%"
+  />
   <hbox align="center">
-    <button label="保存" oncommand="Zotero.__addonInstance__.hooks.onPrefsEvent('save', { window })"/>
-    <html:label id="askgpt-prefs-status" value="" style="color:green"/>
+    <button
+      label="保存"
+      oncommand="
+        Zotero.__addonInstance__.hooks.onPrefsEvent('save', { window })
+      "
+    />
+    <html:label id="askgpt-prefs-status" value="" style="color: green" />
   </hbox>
 </vbox>

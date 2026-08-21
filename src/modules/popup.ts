@@ -32,7 +32,9 @@ export async function openAskPopup() {
         const tabID = mainWin.Zotero_Tabs?.selectedID;
         if (tabID != null) {
           const reader = Zotero.Reader.getByTabID(tabID);
-          const sel = (reader?._iframeWindow?.getSelection?.()?.toString() || "").trim();
+          const sel = (
+            reader?._iframeWindow?.getSelection?.()?.toString() || ""
+          ).trim();
           if (sel) selection = sel;
         }
       } catch (e) {}
@@ -43,17 +45,20 @@ export async function openAskPopup() {
       } catch (e) {}
     }
 
-    // 2. 无选中文字 → 读附件全文（后台，不阻塞面板显示）
+    // 2. 读附件全文（优先整篇论文，选中文字作为定位附加）
     let contextText = "";
     let contextLabel = "";
     let contextKey = "";
-    if (!selection) {
-      const ctx = await readAttachmentContext();
-      if (ctx && ctx.text) {
-        contextText = ctx.text;
-        contextLabel = ctx.label;
-        contextKey = ctx.path || "";
-      }
+    const ctx = await readAttachmentContext();
+    if (ctx && ctx.text) {
+      contextText = selection
+        ? `【选中段落】\n${selection}\n\n【论文全文】\n${ctx.text}`
+        : ctx.text;
+      contextLabel = ctx.label;
+      contextKey = ctx.path || "";
+    } else if (selection) {
+      // 无附件可读（如 PDF 未导出文本）：退回到选中文字
+      contextText = selection;
     }
 
     // 3. 确定会话 key
@@ -211,7 +216,10 @@ function ensurePanel(mainWin: Window) {
       const rect = wrap.getBoundingClientRect();
       Zotero.Prefs.set(
         PANEL_PREF,
-        JSON.stringify({ left: Math.round(rect.left), top: Math.round(rect.top) }),
+        JSON.stringify({
+          left: Math.round(rect.left),
+          top: Math.round(rect.top),
+        }),
       );
     } catch (e) {}
   });
@@ -280,7 +288,11 @@ export function hideAskPopup() {
  */
 const fulltextCache: { [path: string]: { text: string; label: string } } = {};
 
-async function readAttachmentContext(): Promise<{ text: string; label: string; path: string } | null> {
+async function readAttachmentContext(): Promise<{
+  text: string;
+  label: string;
+  path: string;
+} | null> {
   try {
     const pane = Zotero.getActiveZoteroPane();
     if (!pane) return null;
@@ -301,15 +313,20 @@ async function readAttachmentContext(): Promise<{ text: string; label: string; p
     if (!candidates.length) return null;
 
     const pick = (ext: string) =>
-      ext === "md" || ext === "markdown" ? 0
-      : ext === "html" || ext === "htm" ? 1
-      : ext === "txt" || ext === "text" ? 2
-      : -1;
+      ext === "md" || ext === "markdown"
+        ? 0
+        : ext === "html" || ext === "htm"
+          ? 1
+          : ext === "txt" || ext === "text"
+            ? 2
+            : -1;
 
     const readable = candidates
       .map((c) => {
         let p: string | null = null;
-        try { p = c.getFilePath(); } catch (e) {}
+        try {
+          p = c.getFilePath();
+        } catch (e) {}
         if (!p) return null;
         const ext = (p.split(".").pop() || "").toLowerCase();
         const pri = pick(ext);
@@ -328,9 +345,11 @@ async function readAttachmentContext(): Promise<{ text: string; label: string; p
     }
 
     const label =
-      chosen.pri === 0 ? "Markdown 附件"
-      : chosen.pri === 1 ? "HTML 附件"
-      : "TXT 附件";
+      chosen.pri === 0
+        ? "Markdown 附件"
+        : chosen.pri === 1
+          ? "HTML 附件"
+          : "TXT 附件";
 
     const raw = await Zotero.File.getContentsAsync(chosen.path, "utf-8");
     let text: string;
@@ -344,17 +363,17 @@ async function readAttachmentContext(): Promise<{ text: string; label: string; p
     }
 
     if (chosen.pri === 1) {
-      text = text
-        .replace(/<script[\s\S]*?<\/script>/gi, " ")
-        .replace(/<style[\s\S]*?<\/style>/gi, " ")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/&nbsp;/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+      // HTML 附件：优先使用伴生的 Markdown 源（公式为完整 LaTeX，上下标完好）
+      const mdText = await tryReadSiblingMd(chosen.path);
+      if (mdText != null) {
+        text = mdToPlain(mdText);
+      } else {
+        text = htmlToPlain(text);
+      }
     }
 
-    if (text.length > 80000) {
-      text = text.slice(0, 80000) + "\n...[截断]...";
+    if (text.length > 120000) {
+      text = text.slice(0, 120000) + "\n...[截断]...";
     }
 
     const result = { text, label, path: chosen.path };
@@ -363,4 +382,85 @@ async function readAttachmentContext(): Promise<{ text: string; label: string; p
   } catch (e) {
     return null;
   }
+}
+
+/**
+ * 查找 HTML 附件同目录下的伴生 Markdown 源（译文工具生成的 HTML 通常带 md 源，
+ * md 里公式是完整 LaTeX，上下标信息不丢失）。
+ * 候选规则：
+ *   1. 去掉 .html 后缀换 .md（同名不同扩展名）
+ *   2. 去掉 "_离线" 等后缀后再换 .md（如 XXX_中文翻译_离线.html → XXX_中文翻译.md）
+ */
+async function tryReadSiblingMd(htmlPath: string): Promise<string | null> {
+  const base = htmlPath.replace(/\.html?$/i, "");
+  const cands = [
+    base + ".md",
+    base.replace(/_离线$/, "") + ".md",
+    base.replace(/\.(zh|cn|translated|离线)[^/\\]*$/i, "") + ".md",
+  ];
+  for (const p of cands) {
+    if (p === htmlPath) continue;
+    try {
+      const raw = await Zotero.File.getContentsAsync(p, "utf-8");
+      if (raw == null) continue;
+      return typeof raw === "string"
+        ? raw
+        : new TextDecoder("utf-8").decode(raw as BufferSource);
+    } catch (e) {
+      /* 文件不存在，继续下一个候选 */
+    }
+  }
+  return null;
+}
+
+/** HTML 纯文本提取（无伴生 md 时的兜底） */
+function htmlToPlain(text: string): string {
+  return text
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Markdown → 纯文本（保留 LaTeX 公式 $...$ / $$...$$ / \begin{}..\end{}，
+ * 剥离 base64 图片、链接、代码、HTML 标签）。
+ */
+function mdToPlain(md: string): string {
+  return (
+    md
+      // 行内/块级 base64 图片（译文工具会把公式图嵌入 md）整体删除
+      .replace(/!\[[^\]]*\]\(\s*data:[^)]*\)/g, " ")
+      // 普通图片语法删除
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+      // 链接保留文字
+      .replace(/\[([^\]]*)\]\((?:https?:|ftp:)?\/\/[^)]*\)/g, "$1")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      // 删掉 svg/图片相关 HTML 标签（md 里偶尔残留）
+      .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<img[^>]*>/gi, " ")
+      // 删除围栏代码块与行内代码标记（保留代码内容本身）
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`([^`\n]+)`/g, "$1")
+      // 删除 markdown 标题/强调/引用标记
+      .replace(/^\s*#{1,6}\s*/gm, "")
+      .replace(/(\*\*|__)([^*\n]+)\1/g, "$2")
+      .replace(/(\*|_)([^*\n]+)\1/g, "$2")
+      .replace(/^\s*>\s?/gm, "")
+      // 删除 HTML 标签（其余残留）
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"')
+      // 表格分隔行
+      .replace(/^\s*\|?[\s:|-]+\|?\s*$/gm, "")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }

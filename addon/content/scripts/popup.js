@@ -26,9 +26,9 @@
       const mediator =
         window.Services?.wm ||
         Services.wm ||
-        Components?.classes?.["@mozilla.org/appshell/window-browser;1"]?.getService(
-          Components.interfaces.nsIWindowMediator
-        );
+        Components?.classes?.[
+          "@mozilla.org/appshell/window-browser;1"
+        ]?.getService(Components.interfaces.nsIWindowMediator);
       const win = mediator.getMostRecentWindow("navigator:browser");
       if (win && win.Zotero) return win.Zotero;
     } catch (e) {}
@@ -55,8 +55,7 @@
   }
 
   /* ---------- 默认系统提示词（agent 风格，可被设置覆盖） ---------- */
-  const DEFAULT_SYSTEM_PROMPT =
-`你是一个帮助我精读文献的轻量级研究助手（agent）。你的任务基于我提供的"选中的文献原文"，回答我的问题。
+  const DEFAULT_SYSTEM_PROMPT = `你是一个帮助我精读文献的轻量级研究助手（agent）。你的任务基于我提供的"选中的文献原文"，回答我的问题。
 
 ## 你的能力
 1. 问答：基于选中原文 + 你的知识，回答关于这篇文献的任何问题（解释概念、概括方法、分析结果、评价局限、翻译等）。
@@ -148,7 +147,11 @@
         return owner.Zotero.AskGPT;
       }
       // 兜底：独立窗口模式（旧）
-      if (window.opener && window.opener.Zotero && window.opener.Zotero.AskGPT) {
+      if (
+        window.opener &&
+        window.opener.Zotero &&
+        window.opener.Zotero.AskGPT
+      ) {
         return window.opener.Zotero.AskGPT;
       }
       if (Zotero && Zotero.AskGPT) return Zotero.AskGPT;
@@ -191,7 +194,8 @@
     };
   }
   function buildSessionBaseFromState(session) {
-    const contextText = session && session.contextText ? session.contextText : "";
+    const contextText =
+      session && session.contextText ? session.contextText : "";
     if (!contextText) return null;
     const sysText = el.setSys.value.trim() || DEFAULT_SYSTEM_PROMPT;
     return [
@@ -206,7 +210,11 @@
   }
   function buildSessionBase() {
     // 从当前上下文构建固定前缀：system + 全文（或选中文字）
-    let contextText = el.ctxEdit.style.display !== "none" ? el.ctxEdit.value : el.ctxText.textContent;
+    // title 保存的是原始纯文本（含 ^/_ 上下标标记），textContent 是渲染后的
+    let contextText =
+      el.ctxEdit.style.display !== "none"
+        ? el.ctxEdit.value
+        : el.ctxText.title || el.ctxText.textContent;
     contextText = (contextText || "").trim();
     if (!contextText) return null;
     const sysText = el.setSys.value.trim() || DEFAULT_SYSTEM_PROMPT;
@@ -226,7 +234,7 @@
     const t =
       el.ctxEdit.style.display !== "none"
         ? el.ctxEdit.value
-        : el.ctxText.textContent;
+        : el.ctxText.title || el.ctxText.textContent;
     return (t || "").slice(0, 200) + ":" + (t || "").length;
   }
 
@@ -293,13 +301,19 @@
     if (typeof payload === "string") {
       selection = payload;
       itemTitle =
-        (Zotero && Zotero.AskGPT && Zotero.AskGPT.data &&
+        (Zotero &&
+          Zotero.AskGPT &&
+          Zotero.AskGPT.data &&
           Zotero.AskGPT.data.popupState &&
-          Zotero.AskGPT.data.popupState.itemTitle) || "";
+          Zotero.AskGPT.data.popupState.itemTitle) ||
+        "";
       session =
-        (Zotero && Zotero.AskGPT && Zotero.AskGPT.data &&
+        (Zotero &&
+          Zotero.AskGPT &&
+          Zotero.AskGPT.data &&
           Zotero.AskGPT.data.popupState &&
-          Zotero.AskGPT.data.popupState.session) || null;
+          Zotero.AskGPT.data.popupState.session) ||
+        null;
     } else if (payload && typeof payload === "object") {
       selection = payload.selection || "";
       itemTitle = payload.itemTitle || "";
@@ -323,16 +337,14 @@
 
     if (contextText) {
       // 无 PDF 选中时读到附件全文：显示全文并标注来源
-      el.ctxText.textContent = contextText;
-      el.ctxText.title = contextText;
+      setContextText(contextText);
       const parts = [];
       if (contextLabel) parts.push(contextLabel);
       if (itemTitle) parts.push(itemTitle);
       el.ctxItem.textContent = parts.length ? "来源：" + parts.join(" · ") : "";
     } else {
       // 默认：PDF 选中文字，来源为条目标题
-      el.ctxText.textContent = selection;
-      el.ctxText.title = selection;
+      setContextText(selection);
       el.ctxItem.textContent = itemTitle || "";
     }
 
@@ -342,19 +354,46 @@
 
   /* ---------- 渲染（轻量 markdown） ---------- */
   function escapeHtml(s) {
-    return s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // 上下文原文区渲染：纯文本 + 把 LaTeX 风格上下标（^x / ^{x} / _x / _{x}）显示为视觉上下标
+  function renderContextText(text) {
+    let t = escapeHtml(text || "");
+    // 上标 ^{...} 或 ^x
+    t = t.replace(/\^\{([^{}]+)\}/g, "<sup>$1</sup>");
+    t = t.replace(/\^([^\s^{}()（）,;；。，]+)/g, "<sup>$1</sup>");
+    // 下标 _{...} 或 _x
+    t = t.replace(/_\{([^{}]+)\}/g, "<sub>$1</sub>");
+    t = t.replace(/_([^\s_{}()（）,;；。，]+)/g, "<sub>$1</sub>");
+    return t;
+  }
+  function setContextText(text) {
+    el.ctxText.innerHTML = renderContextText(text);
+    el.ctxText.title = text || "";
   }
   function renderMarkdown(text) {
     // 极简渲染：代码块、行内代码、粗体、列表、链接、（尽量保持原样）
     let t = escapeHtml(text || "");
-    t = t.replace(/```([\s\S]*?)```/g, (_a, code) => `<code class="md-code">${code.trim()}</code>`);
-    t = t.replace(/`([^`\n]+)`/g, (_a, c) => `<span class="md-inline-code">${c}</span>`);
+    t = t.replace(
+      /```([\s\S]*?)```/g,
+      (_a, code) => `<code class="md-code">${code.trim()}</code>`,
+    );
+    t = t.replace(
+      /`([^`\n]+)`/g,
+      (_a, c) => `<span class="md-inline-code">${c}</span>`,
+    );
     t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
     t = t.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-    t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+    // LaTeX 风格上下标（DeepSeek 回答里的公式）
+    t = t.replace(/\^\{([^{}]+)\}/g, "<sup>$1</sup>");
+    t = t.replace(/\^([^\s^{}()（）,;；。，]+)/g, "<sup>$1</sup>");
+    t = t.replace(/_\{([^{}]+)\}/g, "<sub>$1</sub>");
+    t = t.replace(/_([^\s_{}()（）,;；。，]+)/g, "<sub>$1</sub>");
+    t = t.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank">$1</a>',
+    );
     t = t.replace(/(^|\n)- (.*)/g, "$1<li>$2</li>");
     t = t.replace(/(^|\n)  (\d+)[.、] (.*)/g, "$1<li>$3</li>");
     return t;
@@ -375,7 +414,9 @@
 
   /* ---------- 流式请求（OpenAI 兼容） ---------- */
   function buildEndpoint() {
-    let base = (el.setBase.value || "https://api.deepseek.com").trim().replace(/\/+$/, "");
+    let base = (el.setBase.value || "https://api.deepseek.com")
+      .trim()
+      .replace(/\/+$/, "");
     // 若 base 已经以 /chat/completions 结尾则直接用
     if (base.endsWith("/chat/completions")) return base;
     return base + "/chat/completions";
@@ -408,6 +449,7 @@
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
     let toolCalls = {}; // index -> {name, arguments}
+    let reasoning = ""; // DeepSeek 思考模式：reasoning_content 需原样回传
     let streamEnded = false;
 
     while (!streamEnded) {
@@ -434,6 +476,7 @@
         const choice = json.choices && json.choices[0];
         if (!choice) continue;
         const delta = choice.delta || {};
+        if (delta.reasoning_content) reasoning += delta.reasoning_content;
         if (delta.content) onDelta(delta.content);
         if (delta.tool_calls) {
           for (const tc of delta.tool_calls) {
@@ -441,7 +484,8 @@
             toolCalls[i] = toolCalls[i] || { name: "", arguments: "" };
             if (tc.function) {
               if (tc.function.name) toolCalls[i].name += tc.function.name;
-              if (tc.function.arguments) toolCalls[i].arguments += tc.function.arguments;
+              if (tc.function.arguments)
+                toolCalls[i].arguments += tc.function.arguments;
             }
           }
         }
@@ -453,7 +497,7 @@
         name: toolCalls[k].name,
         arguments: toolCalls[k].arguments,
       }));
-    return { toolCalls: calls };
+    return { toolCalls: calls, reasoning };
   }
 
   /* ---------- 主循环：问答 + 工具 ---------- */
@@ -493,11 +537,13 @@
     // 整个对话流程共用一个 assistant 气泡，避免工具轮产生空消息
     let ui = null;
     let acc = "";
+    let accReasoning = ""; // DeepSeek 思考模式：累积并随消息回传
     let rafId = null;
     const renderAcc = () => {
       rafId = null;
       if (!ui) return;
-      ui.bubble.innerHTML = renderMarkdown(acc) + '<span class="cursor"></span>';
+      ui.bubble.innerHTML =
+        renderMarkdown(acc) + '<span class="cursor"></span>';
       el.messages.scrollTop = el.messages.scrollHeight;
     };
     const ensureBubble = () => {
@@ -540,7 +586,12 @@
         };
         if (useTools) payload.tools = TOOLS;
 
-        const { toolCalls } = await streamChat(payload, onDelta, controller.signal);
+        const { toolCalls, reasoning } = await streamChat(
+          payload,
+          onDelta,
+          controller.signal,
+        );
+        if (reasoning) accReasoning += reasoning;
 
         // 处理完所有 delta 后，渲染最终结果并去掉游标
         finishRender();
@@ -558,6 +609,7 @@
               function: { name: tc.name, arguments: tc.arguments || "{}" },
             })),
           };
+          if (accReasoning) assistantMsg.reasoning_content = accReasoning;
           messages.push(assistantMsg);
 
           for (let i = 0; i < toolCalls.length; i++) {
@@ -568,7 +620,9 @@
               if (tc.name === "web_search") {
                 const res = await webSearch(args.query || "");
                 result = res.length
-                  ? res.map((r) => `- ${r.title} | ${r.url} | ${r.snippet}`).join("\n")
+                  ? res
+                      .map((r) => `- ${r.title} | ${r.url} | ${r.snippet}`)
+                      .join("\n")
                   : "未搜索到结果，请尝试更换关键词。";
               } else {
                 result = `未知工具: ${tc.name}`;
@@ -588,7 +642,9 @@
         }
 
         // 正常结束：把回答写入会话历史并持久化
-        messages.push({ role: "assistant", content: acc });
+        const finalMsg = { role: "assistant", content: acc };
+        if (accReasoning) finalMsg.reasoning_content = accReasoning;
+        messages.push(finalMsg);
         persistSession();
         setStatus("");
         return;
@@ -602,7 +658,9 @@
         finishRender();
         // 停止也保存已有内容
         if (acc) {
-          messages.push({ role: "assistant", content: acc });
+          const stopMsg = { role: "assistant", content: acc };
+          if (accReasoning) stopMsg.reasoning_content = accReasoning;
+          messages.push(stopMsg);
         }
         persistSession();
       } else {
@@ -631,7 +689,9 @@
       return;
     }
     const assistantMsgs = el.messages.querySelectorAll(".msg.assistant");
-    const lastAssistant = assistantMsgs.length ? assistantMsgs[assistantMsgs.length - 1] : null;
+    const lastAssistant = assistantMsgs.length
+      ? assistantMsgs[assistantMsgs.length - 1]
+      : null;
     if (!lastAssistant) {
       setStatus("还没有可保存的回答");
       return;
@@ -649,12 +709,17 @@
       question = (userMsgs[userMsgs.length - 1].textContent || "").trim();
     }
     const qChars = Array.from(question);
-    const qShort = qChars.length > 40 ? qChars.slice(0, 40).join("") + "…" : question;
+    const qShort =
+      qChars.length > 40 ? qChars.slice(0, 40).join("") + "…" : question;
 
     // 组装笔记 HTML：所有用户内容先转义（& < >），防注入
     const html =
-      "<h1>AskGPT 问答：" + escapeHtml(qShort) + "</h1>" +
-      "<p>" + escapeHtml(answer).replace(/\n/g, "<br/>") + "</p>";
+      "<h1>AskGPT 问答：" +
+      escapeHtml(qShort) +
+      "</h1>" +
+      "<p>" +
+      escapeHtml(answer).replace(/\n/g, "<br/>") +
+      "</p>";
 
     try {
       const pane = z.getActiveZoteroPane();
@@ -716,20 +781,17 @@
       const editing = el.ctxEdit && el.ctxEdit.style.display !== "none";
       if (editing) return;
       const curText =
-        el.ctxText && el.ctxText.textContent
-          ? el.ctxText.textContent.trim()
+        el.ctxText && (el.ctxText.title || el.ctxText.textContent)
+          ? (el.ctxText.title || el.ctxText.textContent).trim()
           : "";
       if (newSel === curText) return;
 
       const g = getAskGPT();
       // 更新原文区（有选中就优先显示选中，覆盖附件全文模式）
-      el.ctxText.textContent = newSel;
-      el.ctxText.title = newSel;
-      const title =
-        (g && g.data && g.data.readerTitle
-          ? g.data.readerTitle
-          : ""
-        ).toString();
+      setContextText(newSel);
+      const title = (
+        g && g.data && g.data.readerTitle ? g.data.readerTitle : ""
+      ).toString();
       el.ctxItem.textContent = title;
       // 重建会话：新选中 = 新上下文
       messages = [];
@@ -765,7 +827,8 @@
       el.ctxCollapse.textContent = hidden ? "收起 ▴" : "展开 ▾";
     });
     el.ctxText.addEventListener("dblclick", () => {
-      el.ctxEdit.value = el.ctxText.textContent;
+      // 用 title（原始纯文本）填充编辑框，避免上下标标记丢失
+      el.ctxEdit.value = el.ctxText.title || el.ctxText.textContent;
       el.ctxEdit.style.display = "";
       el.ctxText.style.display = "none";
       el.ctxEdit.focus();
@@ -774,7 +837,7 @@
       if (ev.key === "Escape") {
         el.ctxEdit.style.display = "none";
         el.ctxText.style.display = "";
-        el.ctxText.textContent = el.ctxEdit.value;
+        setContextText(el.ctxEdit.value);
       }
     });
     // Esc 隐藏面板（调主进程隐藏 iframe）

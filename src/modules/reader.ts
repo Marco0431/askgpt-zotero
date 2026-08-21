@@ -16,7 +16,7 @@ export function registerReader() {
           if (event.reader) attachToReader(event.reader, 2);
           if (event.doc) attachToReaderDoc(event.doc);
 
-          const text = (event.params?.annotation?.text) || "";
+          const text = event.params?.annotation?.text || "";
           if (typeof text === "string" && text.trim()) {
             addon.data.readerSelection = text.trim();
             // 关键：实时推送选中给面板（pdf.js 的 selectionchange 不一定触发，
@@ -168,7 +168,11 @@ export function unregisterContextMenu(win: Window) {
   try {
     const doc = win.document;
     if (!doc) return;
-    for (const id of ["askgpt-menu-sep", "askgpt-menu-item", "zotero-itemmenu-askgpt"]) {
+    for (const id of [
+      "askgpt-menu-sep",
+      "askgpt-menu-item",
+      "zotero-itemmenu-askgpt",
+    ]) {
       const el = doc.getElementById(id);
       if (el) el.remove();
     }
@@ -255,7 +259,11 @@ function onKeyDown(ev: KeyboardEvent) {
   if (!ev.ctrlKey && !ev.metaKey) return;
   if (ev.shiftKey || ev.altKey) return;
   const tag = (ev.target && (ev.target as HTMLElement).tagName) || "";
-  if (tag === "INPUT" || tag === "TEXTAREA" || (ev.target as HTMLElement).isContentEditable) {
+  if (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    (ev.target as HTMLElement).isContentEditable
+  ) {
     return;
   }
   ev.preventDefault();
