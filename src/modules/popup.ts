@@ -278,7 +278,7 @@ export function hideAskPopup() {
  * 读取当前选中条目的 HTML/MD/TXT 附件全文（md 优先，html 次之，txt 兜底）。
  * 带本地缓存：同一会话内相同路径不重复读文件。
  */
-let fulltextCache: { [path: string]: { text: string; label: string } } = {};
+const fulltextCache: { [path: string]: { text: string; label: string } } = {};
 
 async function readAttachmentContext(): Promise<{ text: string; label: string; path: string } | null> {
   try {

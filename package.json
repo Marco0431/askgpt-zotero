@@ -1,7 +1,7 @@
 {
   "name": "askgpt",
   "type": "module",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "选中文献文字，按 Ctrl+K 弹出小窗向 AI 提问。支持 PDF、HTML、Markdown 附件全文提问。兼容 DeepSeek 及任意 OpenAI 兼容 API。",
   "config": {
     "addonName": "AskGPT - Zotero AI 阅读助手",
