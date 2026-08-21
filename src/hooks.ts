@@ -49,13 +49,14 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   } catch (e) {}
 
   // Ctrl+K 快捷键（主窗口文档级，PDF iframe 内由 reader.ts 挂载）
-  win.document.addEventListener("keydown", (ev) => {
+  win.document.addEventListener("keydown", (ev: KeyboardEvent) => {
     const k = ev.key || "";
     if (k.toLowerCase() !== "k") return;
     if (!ev.ctrlKey && !ev.metaKey) return;
     if (ev.shiftKey || ev.altKey) return;
-    const tag = (ev.target && ev.target.tagName) || "";
-    if (tag === "INPUT" || tag === "TEXTAREA" || ev.target.isContentEditable) {
+    const target = ev.target as HTMLElement | null;
+    const tag = (target && target.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || (target && target.isContentEditable)) {
       return;
     }
     ev.preventDefault();

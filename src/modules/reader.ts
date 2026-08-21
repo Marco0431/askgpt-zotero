@@ -32,7 +32,7 @@ export function registerReader() {
       config.addonID,
     );
   } catch (e) {
-    Zotero.logError("AskGPT registerReader: " + e);
+    Zotero.logError(new Error("AskGPT registerReader: " + e));
   }
 }
 
@@ -64,7 +64,7 @@ export function registerToolbar() {
       }
     } catch (e) {}
   } catch (e) {
-    Zotero.logError("AskGPT registerToolbar: " + e);
+    Zotero.logError(new Error("AskGPT registerToolbar: " + e));
   }
 }
 
@@ -102,7 +102,7 @@ function injectToolbarButton(reader: any) {
       try {
         openAskPopup();
       } catch (e) {
-        Zotero.logError("AskGPT toolbar button: " + e);
+        Zotero.logError(new Error("AskGPT toolbar button: " + e));
       }
     };
     btn.addEventListener("click", fire);
@@ -134,7 +134,7 @@ export function registerContextMenu(win: Window) {
     });
     return;
   } catch (e) {
-    Zotero.logError("AskGPT registerContextMenu (toolkit): " + e);
+    Zotero.logError(new Error("AskGPT registerContextMenu (toolkit): " + e));
   }
 
   // 方案 B：原生 XUL 注入（带限次重试，避免 zotero-itemmenu 不存在时无限循环）
@@ -160,7 +160,7 @@ export function registerContextMenu(win: Window) {
     item.addEventListener("command", () => openAskPopup());
     itemMenu.append(sep, item);
   } catch (e) {
-    Zotero.logError("AskGPT registerContextMenu (native): " + e);
+    Zotero.logError(new Error("AskGPT registerContextMenu (native): " + e));
   }
 }
 
@@ -194,7 +194,7 @@ export function attachToReaderDoc(doc: Document): boolean {
         if (_selectionDebounceTimer) clearTimeout(_selectionDebounceTimer);
         _selectionDebounceTimer = setTimeout(() => {
           try {
-            const sel = doc.getSelection ? doc.getSelection().toString().trim() : "";
+            const sel = (doc.getSelection?.()?.toString() || "").trim();
             if (sel && sel !== addon.data.readerSelection) {
               addon.data.readerSelection = sel;
               notifyPopupSelection(sel);
@@ -278,9 +278,9 @@ export function registerNotifier() {
           }
         },
       },
-      ["reader", "tab"],
+      ["reader", "tab"] as unknown as _ZoteroTypes.Notifier.Type[],
     );
   } catch (e) {
-    Zotero.logError("AskGPT registerNotifier: " + e);
+    Zotero.logError(new Error("AskGPT registerNotifier: " + e));
   }
 }

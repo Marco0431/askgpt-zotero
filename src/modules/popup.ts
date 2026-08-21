@@ -19,7 +19,7 @@ export async function openAskPopup() {
   try {
     ensurePanel(mainWin);
   } catch (e) {
-    Zotero.logError("AskGPT ensurePanel: " + e);
+    Zotero.logError(new Error("AskGPT ensurePanel: " + e));
     return;
   }
 
@@ -32,14 +32,14 @@ export async function openAskPopup() {
         const tabID = mainWin.Zotero_Tabs?.selectedID;
         if (tabID != null) {
           const reader = Zotero.Reader.getByTabID(tabID);
-          const sel = reader?._iframeWindow?.getSelection?.().toString().trim();
+          const sel = (reader?._iframeWindow?.getSelection?.()?.toString() || "").trim();
           if (sel) selection = sel;
         }
       } catch (e) {}
     }
     if (!selection) {
       try {
-        selection = mainWin.getSelection().toString().trim();
+        selection = (mainWin.getSelection()?.toString() || "").trim();
       } catch (e) {}
     }
 
@@ -62,7 +62,7 @@ export async function openAskPopup() {
       : "sel:" + (selection || "").slice(0, 200);
 
     // 4. 初始化主进程会话存储
-    const g: any = Zotero[config.addonInstance];
+    const g: any = (Zotero as any)[config.addonInstance];
     if (!g.data.sessions) g.data.sessions = {};
     const session = g.data.sessions[sessionKey] || {
       key: sessionKey,
@@ -106,7 +106,7 @@ export async function openAskPopup() {
     // 7. 刷新面板状态（面板已由 ensurePanel 同步显示，这里只推送最新上下文）
     refreshPanel(mainWin, sessionKey, selection, session);
   } catch (e) {
-    Zotero.logError("AskGPT openAskPopup: " + e);
+    Zotero.logError(new Error("AskGPT openAskPopup: " + e));
   }
 }
 
@@ -131,7 +131,7 @@ function ensurePanel(mainWin: Window) {
   let saved: any = null;
   try {
     const raw = Zotero.Prefs.get(PANEL_PREF);
-    if (raw) saved = JSON.parse(raw);
+    if (raw) saved = JSON.parse(String(raw));
   } catch (e) {}
   const initLeft = saved && saved.left != null ? saved.left : null;
   const initTop = saved && saved.top != null ? saved.top : null;
@@ -181,7 +181,7 @@ function ensurePanel(mainWin: Window) {
 
   wrap.appendChild(bar);
   wrap.appendChild(panel);
-  mainWin.document.documentElement.appendChild(wrap);
+  mainWin.document.documentElement!.appendChild(wrap);
 
   // 拖拽逻辑：拖 bar 移动 wrap，松手保存位置
   let dragging = false;
@@ -219,7 +219,7 @@ function ensurePanel(mainWin: Window) {
   // iframe 加载完成后自动读取最新 popupState 刷新（若 openAskPopup 在后台填充中）
   panel.addEventListener("load", () => {
     try {
-      const g: any = Zotero[config.addonInstance];
+      const g: any = (Zotero as any)[config.addonInstance];
       const ps = g.data.popupState;
       if (!ps) return;
       const iw = panel.contentWindow as any;
@@ -267,7 +267,9 @@ export function hideAskPopup() {
   try {
     const mainWin = Zotero.getMainWindow();
     if (!mainWin) return;
-    const wrap = mainWin.document.getElementById("askgpt-panel-wrap");
+    const wrap = mainWin.document.getElementById(
+      "askgpt-panel-wrap",
+    ) as HTMLElement | null;
     if (wrap) wrap.style.display = "none";
   } catch (e) {}
 }
@@ -286,14 +288,14 @@ async function readAttachmentContext(): Promise<{ text: string; label: string; p
     if (!items || !items.length) return null;
 
     const candidates: any[] = [];
-    const first = items[0];
+    const first: any = items[0];
     if (first.isAttachment) {
       candidates.push(first);
     } else if (typeof first.getAttachments === "function") {
       const attachIDs = first.getAttachments() || [];
       for (let i = 0; i < Math.min(10, attachIDs.length); i++) {
         const child = Zotero.Items.get(attachIDs[i]);
-        if (child && child.isAttachment) candidates.push(child);
+        if (child && (child as any).isAttachment) candidates.push(child);
       }
     }
     if (!candidates.length) return null;
@@ -330,8 +332,16 @@ async function readAttachmentContext(): Promise<{ text: string; label: string; p
       : chosen.pri === 1 ? "HTML 附件"
       : "TXT 附件";
 
-    let text = await Zotero.File.getContentsAsync(chosen.path, "utf-8");
-    if (typeof text !== "string") return null;
+    const raw = await Zotero.File.getContentsAsync(chosen.path, "utf-8");
+    let text: string;
+    if (typeof raw === "string") {
+      text = raw;
+    } else if (raw != null) {
+      // BufferSource（Uint8Array）→ 转字符串
+      text = new TextDecoder("utf-8").decode(raw as BufferSource);
+    } else {
+      return null;
+    }
 
     if (chosen.pri === 1) {
       text = text

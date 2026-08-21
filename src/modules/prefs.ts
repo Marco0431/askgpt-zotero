@@ -35,7 +35,7 @@ export function handlePrefsEvent(type: string, data: { [key: string]: any }) {
       const web = doc.getElementById("askgpt-web-input");
       if (web) (web as HTMLInputElement).checked = Zotero.Prefs.get(ADDN + "webSearch") !== false;
     } catch (e) {
-      Zotero.logError("AskGPT prefs load: " + e);
+      Zotero.logError(new Error("AskGPT prefs load: " + e));
     }
   }
 }
@@ -61,6 +61,6 @@ export function savePrefs(win: Window) {
     const status = doc.getElementById("askgpt-prefs-status");
     if (status) status.setAttribute("value", "✓ 已保存");
   } catch (e) {
-    Zotero.logError("AskGPT prefs save: " + e);
+    Zotero.logError(new Error("AskGPT prefs save: " + e));
   }
 }
