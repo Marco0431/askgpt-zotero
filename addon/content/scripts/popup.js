@@ -419,7 +419,10 @@
       .replace(/\/+$/, "");
     // 若 base 已经以 /chat/completions 结尾则直接用
     if (base.endsWith("/chat/completions")) return base;
-    return base + "/chat/completions";
+    // OpenAI 兼容接口统一补 /v1：硅基流动等厂商必须 /v1/chat/completions，
+    // DeepSeek 官方 /v1 路径同样支持（默认 https://api.deepseek.com → /v1/chat/completions）
+    if (base.endsWith("/v1")) return base + "/chat/completions";
+    return base + "/v1/chat/completions";
   }
 
   // 解析 SSE 流
