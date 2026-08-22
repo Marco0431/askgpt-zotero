@@ -357,45 +357,107 @@
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
-  // 上下文原文区渲染：纯文本 + 把 LaTeX 风格上下标（^x / ^{x} / _x / _{x}）显示为视觉上下标
-  function renderContextText(text) {
-    let t = escapeHtml(text || "");
-    // 上标 ^{...} 或 ^x
+  // LaTeX 风格上下标（^x / ^{x} / _x / _{x}）→ 视觉上标/下标
+  function applyScripts(t) {
     t = t.replace(/\^\{([^{}]+)\}/g, "<sup>$1</sup>");
     t = t.replace(/\^([^\s^{}()（）,;；。，]+)/g, "<sup>$1</sup>");
-    // 下标 _{...} 或 _x
     t = t.replace(/_\{([^{}]+)\}/g, "<sub>$1</sub>");
     t = t.replace(/_([^\s_{}()（）,;；。，]+)/g, "<sub>$1</sub>");
     return t;
+  }
+  // 上下文原文区渲染：纯文本 + 上下标
+  function renderContextText(text) {
+    return applyScripts(escapeHtml(text || ""));
   }
   function setContextText(text) {
     el.ctxText.innerHTML = renderContextText(text);
     el.ctxText.title = text || "";
   }
   function renderMarkdown(text) {
-    // 极简渲染：代码块、行内代码、粗体、列表、链接、（尽量保持原样）
-    let t = escapeHtml(text || "");
-    t = t.replace(
-      /```([\s\S]*?)```/g,
-      (_a, code) => `<code class="md-code">${code.trim()}</code>`,
-    );
-    t = t.replace(
-      /`([^`\n]+)`/g,
-      (_a, c) => `<span class="md-inline-code">${c}</span>`,
-    );
-    t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    t = t.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-    // LaTeX 风格上下标（DeepSeek 回答里的公式）
-    t = t.replace(/\^\{([^{}]+)\}/g, "<sup>$1</sup>");
-    t = t.replace(/\^([^\s^{}()（）,;；。，]+)/g, "<sup>$1</sup>");
-    t = t.replace(/_\{([^{}]+)\}/g, "<sub>$1</sub>");
-    t = t.replace(/_([^\s_{}()（）,;；。，]+)/g, "<sub>$1</sub>");
+    const src = String(text || "");
+    const codeBlocks = [];
+    const inlineCodes = [];
+    const formulas = [];
+    let body = src;
+    // 1. 代码块占位（内部语法不被后续正则破坏）
+    body = body.replace(/```(\w*)[^\n]*\n?([\s\S]*?)```/g, (_m, lang, code) => {
+      codeBlocks.push(`<pre class="md-code">${escapeHtml(code.trim())}</pre>`);
+      return "@@CB" + (codeBlocks.length - 1) + "@@";
+    });
+    // 2. 行内代码占位（避免上下标转换破坏代码内容）
+    body = body.replace(/`([^`\n]+)`/g, (_m, c) => {
+      inlineCodes.push(`<span class="md-inline-code">${escapeHtml(c)}</span>`);
+      return "@@IC" + (inlineCodes.length - 1) + "@@";
+    });
+    // 3. 块级公式 $$...$$ 占位
+    body = body.replace(/\$\$([\s\S]+?)\$\$/g, (_m, inner) => {
+      formulas.push(
+        `<div class="md-formula">${applyScripts(escapeHtml(inner.trim()))}</div>`,
+      );
+      return "@@FB" + (formulas.length - 1) + "@@";
+    });
+    // 4. 转义
+    let t = escapeHtml(body);
+    // 5. 表格（表头 + 分隔行 + 数据行）
+    t = t.replace(/((?:^\|[^\n]*\|\n?)+)/gm, (block) => {
+      const rows = block
+        .trim()
+        .split("\n")
+        .map((r) => r.trim());
+      if (rows.length < 2) return block;
+      const hasSep = rows[1] && /^\|[\s:|-]*\|$/.test(rows[1]);
+      if (!hasSep) return block;
+      const mk = (r, isHead) => {
+        const tag = isHead ? "th" : "td";
+        return (
+          "<tr>" +
+          r
+            .slice(1, -1)
+            .split("|")
+            .map((c) => `<${tag}>${c.trim() || "&nbsp;"}</${tag}>`)
+            .join("") +
+          "</tr>"
+        );
+      };
+      return (
+        "<table><thead>" +
+        mk(rows[0], true) +
+        "</thead><tbody>" +
+        rows
+          .slice(2)
+          .map((r) => mk(r, false))
+          .join("") +
+        "</tbody></table>\n"
+      );
+    });
+    // 6. 水平线
+    t = t.replace(/^-\s*$/gm, "<hr/>");
+    // 7. 标题
+    t = t.replace(/^### (.+)$/gm, "<h3>$1</h3>");
+    t = t.replace(/^## (.+)$/gm, "<h2>$1</h2>");
+    t = t.replace(/^# (.+)$/gm, "<h1>$1</h1>");
+    // 8. 引用
+    t = t.replace(/^&gt;\s?(.+)$/gm, "<blockquote>$1</blockquote>");
+    // 9. 行内公式 $...$
+    t = t.replace(/\$([^$\n]+)\$/g, (_m, inner) => applyScripts(inner));
+    // 10. 删除线
+    t = t.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+    // 11. 链接
     t = t.replace(
       /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
       '<a href="$2" target="_blank">$1</a>',
     );
-    t = t.replace(/(^|\n)- (.*)/g, "$1<li>$2</li>");
-    t = t.replace(/(^|\n)  (\d+)[.、] (.*)/g, "$1<li>$3</li>");
+    // 12. 粗体 / 斜体 / 上下标
+    t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    t = applyScripts(t);
+    // 13. 列表（裸 li，CSS 自绘圆点）
+    t = t.replace(/(^|\n)-\s+(.*)/g, "$1<li>$2</li>");
+    t = t.replace(/(^|\n)[ ]?(\d+)[.、]\s+(.*)/g, "$1<li>$3</li>");
+    // 14. 还原占位（行内代码 / 代码块 / 块级公式）
+    t = t.replace(/@@IC(\d+)@@/g, (_m, i) => inlineCodes[+i]);
+    t = t.replace(/@@CB(\d+)@@/g, (_m, i) => codeBlocks[+i]);
+    t = t.replace(/@@FB(\d+)@@/g, (_m, i) => formulas[+i]);
     return t;
   }
   function appendMessage(role, text, isStream) {

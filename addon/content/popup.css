@@ -565,6 +565,27 @@ body {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   margin: 10px 0;
 }
+.msg.assistant .bubble del {
+  color: #8892a6;
+  text-decoration: line-through;
+}
+.msg.assistant .bubble .md-formula {
+  display: block;
+  text-align: center;
+  margin: 8px 0;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.045);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #e2e6ef;
+}
+.msg.assistant .bubble sub,
+.msg.assistant .bubble sup,
+#context-text sub,
+#context-text sup {
+  line-height: 0;
+  font-size: 0.75em;
+}
 
 /* ---------- 流式输出 ---------- */
 .streaming {
