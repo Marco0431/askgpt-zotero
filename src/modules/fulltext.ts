@@ -93,6 +93,26 @@ function getReaderAttachment(): any {
   }
 }
 
+/** 上下文来源偏好：auto（读哪个文件就用哪个） / pdf（PDF 优先） / translation（译文优先） */
+export type SourceMode = "auto" | "pdf" | "translation";
+
+export function getSourceMode(): SourceMode {
+  try {
+    const v = String(
+      Zotero.Prefs.get("extensions.askgpt.contextSource") || "",
+    ).trim();
+    if (v === "pdf" || v === "translation") return v;
+  } catch (e) {}
+  return "auto";
+}
+
+/** 兄弟附件之间的打分（越小越优先）：默认 PDF 优先，可按偏好改成译文优先 */
+const SIBLING_SCORE: { [mode in SourceMode]: { [ext: string]: number } } = {
+  auto: { pdf: 1, md: 2, html: 3, htm: 3, txt: 4, text: 4 },
+  pdf: { pdf: 0, md: 1, html: 2, htm: 2, txt: 3, text: 3 },
+  translation: { md: 0, html: 1, htm: 1, txt: 2, text: 2, pdf: 5 },
+};
+
 /** 条目标题（附件取其父条目标题） */
 export function getContextTitle(item: any): string {
   try {
@@ -171,6 +191,10 @@ function collectCandidates(): Cand[] {
   // 阅读器里的附件本身兜底（父条目拿不到时）
   if (readerItem) groups.push({ items: [readerItem], base: 5 });
 
+  const mode = getSourceMode();
+  const readerID = readerItem ? readerItem.id : 0;
+  const scoreTable = SIBLING_SCORE[mode];
+
   const out: Cand[] = [];
   const seen: { [id: number]: boolean } = {};
   for (const g of groups) {
@@ -188,9 +212,13 @@ function collectCandidates(): Cand[] {
           return "";
         }
       })();
-      const extScore = EXT_SCORE[ext];
-      if (extScore === undefined) continue;
-      const cand = toCandidate(item, g.base + extScore);
+      const score = scoreTable[ext];
+      if (score === undefined) continue;
+      // auto 模式：正在读的那个文件最优先（读 PDF 就用 PDF，读译文就用译文）；
+      // 其余情况按偏好打分（默认 PDF 优先，可切到译文优先拿 LaTeX）
+      const rank =
+        mode === "auto" && item.id === readerID ? g.base : g.base + 10 + score;
+      const cand = toCandidate(item, rank);
       if (cand) out.push(cand);
     }
   }

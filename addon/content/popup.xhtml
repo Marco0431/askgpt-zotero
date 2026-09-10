@@ -122,6 +122,16 @@
           <input type="number" id="set-temp" min="0" max="2" step="0.1" />
         </div>
         <div class="form-row">
+          <label>整篇文献的来源（下次打开面板生效）</label>
+          <select id="set-ctx-src">
+            <option value="auto">自动：用我正在读的那个文件</option>
+            <option value="pdf">PDF 优先：始终送原始 PDF 全文</option>
+            <option value="translation">
+              译文优先：用译文附件（公式是 LaTeX）
+            </option>
+          </select>
+        </div>
+        <div class="form-row">
           <label>系统提示词</label>
           <textarea id="set-sys" rows="5" spellcheck="false"></textarea>
         </div>

@@ -12,6 +12,7 @@ declare namespace _ZoteroTypes {
       "model": string;
       "temperature": number;
       "webSearch": boolean;
+      "contextSource": string;
       "systemPrompt": string;
     };
   }

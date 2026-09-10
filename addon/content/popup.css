@@ -287,11 +287,13 @@ body {
 }
 .form-row input,
 .form-row textarea,
+.form-row select,
 #set-base,
 #set-key,
 #set-model,
 #set-temp,
-#set-sys {
+#set-sys,
+#set-ctx-src {
   width: 100%;
   background: #101216;
   border: 1px solid rgba(255, 255, 255, 0.1);

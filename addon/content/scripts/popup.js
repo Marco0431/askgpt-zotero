@@ -55,10 +55,10 @@
   }
 
   /* ---------- 默认系统提示词（agent 风格，可被设置覆盖） ---------- */
-  const DEFAULT_SYSTEM_PROMPT = `你是一个帮助我精读文献的轻量级研究助手（agent）。你的任务基于我提供的"选中的文献原文"，回答我的问题。
+  const DEFAULT_SYSTEM_PROMPT = `你是一个帮助我精读文献的轻量级研究助手（agent）。我会把**整篇文献全文**作为上下文发给你，并在提问时用【选中段落】标出我正在看的部分。
 
 ## 你的能力
-1. 问答：基于选中原文 + 你的知识，回答关于这篇文献的任何问题（解释概念、概括方法、分析结果、评价局限、翻译等）。
+1. 问答：基于整篇文献作答（解释概念、概括方法、分析结果、评价局限、翻译等）。重点关注【选中段落】，但可以引用全文任何位置。
 2. 联网检索：你可以调用工具 web_search(query) 搜索互联网，用来核实事实、查找相关背景/最新研究/术语解释。
 
 ## 工具使用规则
@@ -68,10 +68,10 @@
 
 ## 回答要求
 - 一律用简体中文回答，除非我明确要求其他语言。
+- 公式一律用 LaTeX 书写：行内用 \\(...\\)，独立成行用 $$...$$。
 - 先基于原文作答，再补充你自己的知识或检索结果。
-- 引用原文时用引号并说明出处（如"原文第几部分"），能对应的话用我的原文原话。
-- 结构化输出：可用小标题、列表；不要空话套话。
-- 若你用到了联网搜索，在相关位置标注（来源: 网址）。`;
+- 引用原文时用引号并说明位置（第几节 / 第几个公式）。
+- 结构化输出：可用小标题、列表；不要空话套话。`;
 
   /* ---------- web_search 工具实现（无需 API Key 的公开搜索引擎） ---------- */
   async function webSearch(query) {
@@ -306,6 +306,7 @@
     setModel: $("set-model"),
     setTemp: $("set-temp"),
     setSys: $("set-sys"),
+    setCtxSrc: $("set-ctx-src"),
     setWeb: $("set-web"),
     saveStatus: $("save-status"),
   };
@@ -316,7 +317,15 @@
     el.setKey.value = getPref("apiKey", "");
     el.setModel.value = getPref("model", "deepseek-chat");
     el.setTemp.value = getPref("temperature", 0.3);
-    el.setSys.value = getPref("systemPrompt", DEFAULT_SYSTEM_PROMPT);
+    let sys = String(getPref("systemPrompt", DEFAULT_SYSTEM_PROMPT) || "");
+    // 老版本的默认提示词没有「整篇文献 + LaTeX 输出」要求，自动升级；
+    // 用户自己改过的提示词（不含老默认特征句）保持不动
+    if (sys.includes("你的任务基于我提供的") && !sys.includes("整篇文献全文")) {
+      sys = DEFAULT_SYSTEM_PROMPT;
+      setPref("systemPrompt", sys);
+    }
+    el.setSys.value = sys;
+    el.setCtxSrc.value = getPref("contextSource", "auto");
     el.setWeb.checked = getPref("webSearch", true) !== false;
     updateBadge();
   }
@@ -326,8 +335,9 @@
     setPref("model", el.setModel.value.trim());
     setPref("temperature", parseFloat(el.setTemp.value) || 0.3);
     setPref("systemPrompt", el.setSys.value);
+    setPref("contextSource", el.setCtxSrc.value || "auto");
     setPref("webSearch", el.setWeb.checked);
-    el.saveStatus.textContent = "✓ 已保存";
+    el.saveStatus.textContent = "✓ 已保存（来源改动下次打开面板生效）";
     setTimeout(() => (el.saveStatus.textContent = ""), 1500);
     updateBadge();
   }
