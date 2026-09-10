@@ -142,10 +142,8 @@
   let paperLoading = false;
   // 当前选中段落——只作为「本次问题的焦点」，不会顶掉全文
   let focusSel = "";
-  // 前缀是从哪份文本建的（全文晚到 / 被编辑过时要作废重建）
+  // 前缀是从哪份文本建的（全文晚到时要作废重建）
   let sessionBaseText = "";
-  // 全文预览缓存（避免每次选中变化都重渲染 10 万字）
-  let fullRenderKey = "";
   let lastStreamRender = 0;
 
   /* ---------- 主进程会话存取 ---------- */
@@ -188,7 +186,6 @@
       paperText = session.contextText;
       paperLabel = session.contextLabel || "";
       paperChars = paperText.length;
-      fullRenderKey = "";
     }
     if (!paperTitle && session && session.itemTitle) {
       paperTitle = session.itemTitle;
@@ -281,18 +278,10 @@
   const el = {
     modelBadge: $("model-badge"),
     settings: $("settings"),
-    ctxText: $("context-text"),
-    ctxItem: $("context-item"),
-    ctxEdit: $("context-edit"),
-    ctxCollapse: $("ctx-collapse"),
-    ctxMeta: $("context-meta"),
-    ctxWarn: $("context-warn"),
-    ctxFocus: $("context-focus"),
-    ctxFocusWrap: $("context-focus-wrap"),
-    ctxFullLabel: $("context-full-label"),
-    ctxHint: $("context-hint"),
-    tagPaper: $("tag-paper"),
-    tagFocus: $("tag-focus"),
+    btnSettings: $("btn-settings"),
+    ctxBadge: $("ctx-badge"),
+    focusBadge: $("focus-badge"),
+    focusLabel: $("focus-label"),
     focusClear: $("focus-clear"),
     input: $("input"),
     btnSend: $("btn-send"),
@@ -308,8 +297,78 @@
     setSys: $("set-sys"),
     setCtxSrc: $("set-ctx-src"),
     setWeb: $("set-web"),
+    setFontSize: $("set-fontsize"),
+    setPanelW: $("set-panel-w"),
+    setPanelH: $("set-panel-h"),
     saveStatus: $("save-status"),
   };
+
+  /* ---------- 外观：字体大小 / 面板大小（改完立即生效，不用重启） ---------- */
+  const FS_MIN = 10;
+  const FS_MAX = 22;
+  const PANEL_W_MIN = 420;
+  const PANEL_W_MAX = 1600;
+  const PANEL_H_MIN = 400;
+  const PANEL_H_MAX = 1600;
+  const DEFAULT_PANEL_SIZE = { w: 720, h: 860 };
+
+  function clampNum(v, min, max, fallback) {
+    const n = parseFloat(v);
+    if (!isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+  }
+
+  /** 字体大小 = 一个 CSS 变量，整面板都跟着缩放（实时） */
+  function applyFontSize(px) {
+    const size = clampNum(px, FS_MIN, FS_MAX, 14);
+    try {
+      document.documentElement.style.setProperty("--ag-fs", size + "px");
+    } catch (e) {}
+    return size;
+  }
+
+  /** 解析 "720x860" / {width,height} / [w,h] 形式的面板尺寸设置 */
+  function parsePanelSize(raw) {
+    try {
+      if (raw && typeof raw === "object") {
+        const w = raw.w || raw.width;
+        const h = raw.h || raw.height;
+        if (w && h) return { w: parseFloat(w), h: parseFloat(h) };
+      }
+      const m = String(raw || "").match(/(\d+)\s*[x×,;\s]\s*(\d+)/i);
+      if (m) return { w: parseFloat(m[1]), h: parseFloat(m[2]) };
+    } catch (e) {}
+    return null;
+  }
+
+  /** 面板 iframe（面板本身就是主窗口里的 iframe，可直接改自己的尺寸） */
+  function getPanelFrame() {
+    try {
+      const fe = window.frameElement;
+      if (fe && fe.style) return fe;
+    } catch (e) {}
+    return null;
+  }
+
+  function applyPanelSize(w, h) {
+    const fe = getPanelFrame();
+    if (!fe) return null;
+    let W = clampNum(w, PANEL_W_MIN, PANEL_W_MAX, DEFAULT_PANEL_SIZE.w);
+    let H = clampNum(h, PANEL_H_MIN, PANEL_H_MAX, DEFAULT_PANEL_SIZE.h);
+    // 不要让面板超出 Zotero 主窗口
+    try {
+      const win = fe.ownerGlobal || window.parent;
+      if (win && win.innerWidth) {
+        W = Math.min(W, Math.max(PANEL_W_MIN, win.innerWidth - 40));
+      }
+      if (win && win.innerHeight) {
+        H = Math.min(H, Math.max(360, win.innerHeight - 80));
+      }
+    } catch (e) {}
+    fe.style.width = W + "px";
+    fe.style.height = H + "px";
+    return { w: W, h: H };
+  }
 
   /* ---------- 设置 ---------- */
   function loadSettings() {
@@ -327,8 +386,30 @@
     el.setSys.value = sys;
     el.setCtxSrc.value = getPref("contextSource", "auto");
     el.setWeb.checked = getPref("webSearch", true) !== false;
+    // 外观：字号立即生效；面板尺寸只在设置里展示（保存后才调整）
+    const fs = applyFontSize(getPref("fontSize", 14));
+    el.setFontSize.value = String(fs);
+    const size = parsePanelSize(getPref("panelSize", "")) || DEFAULT_PANEL_SIZE;
+    const frameSize = measurePanelFrame();
+    const shown = frameSize || size;
+    el.setPanelW.value = String(Math.round(shown.w));
+    el.setPanelH.value = String(Math.round(shown.h));
     updateBadge();
   }
+
+  /** 当前 iframe 的真实尺寸（拖拽/上次设置后的实际值） */
+  function measurePanelFrame() {
+    const fe = getPanelFrame();
+    if (!fe) return null;
+    try {
+      const r = fe.getBoundingClientRect();
+      if (r && r.width > 0 && r.height > 0) {
+        return { w: r.width, h: r.height };
+      }
+    } catch (e) {}
+    return null;
+  }
+
   function saveSettings() {
     setPref("baseURL", el.setBase.value.trim());
     setPref("apiKey", el.setKey.value.trim());
@@ -337,6 +418,15 @@
     setPref("systemPrompt", el.setSys.value);
     setPref("contextSource", el.setCtxSrc.value || "auto");
     setPref("webSearch", el.setWeb.checked);
+    // 外观：字号 + 面板尺寸（都立即生效）
+    const fs = applyFontSize(el.setFontSize.value);
+    setPref("fontSize", fs);
+    const applied = applyPanelSize(el.setPanelW.value, el.setPanelH.value);
+    if (applied) {
+      setPref("panelSize", applied.w + "x" + applied.h);
+      el.setPanelW.value = String(Math.round(applied.w));
+      el.setPanelH.value = String(Math.round(applied.h));
+    }
     el.saveStatus.textContent = "✓ 已保存（来源改动下次打开面板生效）";
     setTimeout(() => (el.saveStatus.textContent = ""), 1500);
     updateBadge();
@@ -404,7 +494,6 @@
     // 整篇文献：读到才更新；loading 阶段保留上一次的内容，界面不闪
     if (contextText) {
       if (contextText !== paperText) {
-        fullRenderKey = "";
         // 全文晚到或被替换：之前可能用选中段落建过前缀，作废重建（历史保留）
         if (sessionBase && sessionBaseText && sessionBaseText !== contextText) {
           sessionBase = null;
@@ -420,61 +509,64 @@
     paperLoading = loading;
     if (selection) focusSel = String(selection).trim();
 
-    // 先恢复会话（可能带回上次的全文），再刷新上下文卡片
+    // 先恢复会话（可能带回上次的全文），再刷新顶部状态徽章
     loadSession(session);
-    updateContextView();
+    updateContextBadges();
   }
 
-  /** 把「整篇文献 + 选中段落」的状态画到上下文卡片 */
-  function updateContextView() {
-    el.tagPaper.classList.toggle("hidden", !paperText);
-    el.tagFocus.classList.toggle("hidden", !focusSel);
-    if (focusSel) {
-      const n = focusSel.length;
-      el.tagFocus.textContent =
-        "选中段落 " + (n > 999 ? Math.round(n / 1000) + "k" : n) + " 字";
-    }
-
-    if (paperLoading) {
-      el.ctxMeta.textContent = "⏳ 正在读取整篇文献…";
+  /** 「整篇文献 + 选中段落」的状态 → 顶部两个极简徽章（不再有大卡片） */
+  function updateContextBadges() {
+    // 1) 整篇文献徽章：正常=绿、读不到=黄、读取中=灰
+    if (paperLoading && !paperText) {
+      el.ctxBadge.textContent = "⏳ 正在读取全文…";
+      el.ctxBadge.className = "ctx-badge loading";
     } else if (paperText) {
-      el.ctxMeta.textContent =
-        (paperLabel ? paperLabel + " · " : "") +
-        paperChars.toLocaleString() +
+      el.ctxBadge.textContent =
+        "📄 整篇文献 " +
+        formatChars(paperChars) +
         " 字" +
+        (paperLabel ? " · " + paperLabel : "") +
         (paperTruncated ? "（已截断）" : "");
+      el.ctxBadge.className = "ctx-badge";
+    } else if (focusSel) {
+      el.ctxBadge.textContent = "⚠ 未读到全文 · 仅发选中段落";
+      el.ctxBadge.className = "ctx-badge warn";
     } else {
-      el.ctxMeta.textContent = "";
+      el.ctxBadge.textContent = "⚠ 无文献上下文";
+      el.ctxBadge.className = "ctx-badge warn";
     }
+    el.ctxBadge.classList.remove("hidden");
+    el.ctxBadge.title = [
+      paperTitle ? "📄 " + paperTitle : "",
+      paperText
+        ? "整篇文献始终作为会话前缀发送（" +
+          paperChars.toLocaleString() +
+          " 字" +
+          (paperLabel ? " · " + paperLabel : "") +
+          (paperTruncated ? " · 已截断" : "") +
+          "）"
+        : "未读到文献全文（扫描版 PDF / 未选中条目？）——本次只发送选中段落",
+    ]
+      .filter(Boolean)
+      .join("\n");
 
-    el.ctxItem.textContent = paperTitle ? "📄 " + paperTitle : "";
-
-    if (!paperLoading && !paperText) {
-      el.ctxWarn.textContent =
-        "未读到文献全文（扫描版 PDF / 未选中条目？）——本次只会发送选中段落。";
-      el.ctxWarn.classList.remove("hidden");
-    } else {
-      el.ctxWarn.classList.add("hidden");
+    // 2) 选中段落徽章（本次提问的焦点，可一键清除）
+    el.focusBadge.classList.toggle("hidden", !focusSel);
+    if (focusSel) {
+      el.focusLabel.textContent =
+        "🎯 选中 " + formatChars(focusSel.length) + " 字";
+      el.focusBadge.title =
+        "本次提问会带上这段选中文字：\n" +
+        focusSel.slice(0, 200) +
+        (focusSel.length > 200 ? "…" : "");
     }
+  }
 
-    // 当前选中段落
-    el.ctxFocusWrap.classList.toggle("hidden", !focusSel);
-    if (focusSel) el.ctxFocus.innerHTML = renderContextText(focusSel);
-
-    // 全文预览：内容变了才重渲染（十万字重排很贵，选中变化时不做）
-    const key = paperText
-      ? paperText.length + ":" + paperText.slice(0, 48)
-      : "";
-    if (key !== fullRenderKey) {
-      fullRenderKey = key;
-      setContextText(paperText || focusSel || "");
-    }
-
-    el.ctxFullLabel.textContent = paperText
-      ? "全文（已作为上下文发送给 AI）"
-      : focusSel
-        ? "选中段落（作为上下文发送）"
-        : "上下文";
+  /** 12345 → "12.3k"，便于把字数塞进小徽章 */
+  function formatChars(n) {
+    const v = Number(n) || 0;
+    if (v >= 10000) return (v / 1000).toFixed(1) + "k";
+    return v.toLocaleString();
   }
 
   /* ---------- 渲染（轻量 markdown） ---------- */
@@ -489,20 +581,6 @@
     t = t.replace(/_\{([^{}]+)\}/g, "<sub>$1</sub>");
     t = t.replace(/_([^\s_{}()（）,;；。，]+)/g, "<sub>$1</sub>");
     return t;
-  }
-  // 上下文原文区渲染：真公式（KaTeX）+ 其余原样；渲染器不可用时退回上下标兜底
-  function renderContextText(text) {
-    const R = window.AskGPTRender;
-    if (R && R.renderPlainWithMath) {
-      try {
-        return R.renderPlainWithMath(text || "");
-      } catch (e) {}
-    }
-    return applyScripts(escapeHtml(text || ""));
-  }
-  function setContextText(text) {
-    el.ctxText.innerHTML = renderContextText(text);
-    el.ctxText.title = text || "";
   }
 
   /**
@@ -773,7 +851,7 @@
     const q = (questionText != null ? questionText : el.input.value).trim();
     if (!q) return;
     if (!el.setKey.value.trim()) {
-      setStatus("请先在上方 ⚙ 设置里填写 API Key");
+      setStatus("请先在 ⚙ 设置里填写 API Key（设置按钮在输入框旁边）");
       return;
     }
     if (!paperText && !focusSel) {
@@ -1064,18 +1142,15 @@
     try {
       newSel = (newSel || "").toString().trim();
       if (!newSel) return;
-      // 用户手动编辑原文框时不覆盖
-      const editing = el.ctxEdit && el.ctxEdit.style.display !== "none";
-      if (editing) return;
       if (newSel === (focusSel || "").trim()) return;
       focusSel = newSel;
-      updateContextView();
+      updateContextBadges();
       persistSession();
       setStatus("");
     } catch (e) {}
   }
 
-  /** 面板内框选文字（上下文卡片 / AI 回答里）→ 作为本次提问的选中段落 */
+  /** 面板内框选文字（AI 回答 / 设置外任意处）→ 作为本次提问的选中段落 */
   function capturePanelSelection() {
     try {
       const sel = window.getSelection ? window.getSelection() : null;
@@ -1092,16 +1167,48 @@
       }
       if (text === (focusSel || "").trim()) return;
       focusSel = text;
-      updateContextView();
+      updateContextBadges();
       persistSession();
     } catch (e) {}
+  }
+
+  /* ---------- 设置面板开/关 ---------- */
+  function openSettings() {
+    el.settings.classList.remove("hidden");
+    if (el.btnSettings) el.btnSettings.classList.add("active");
+    // 每次打开都重读设置，避免显示上次编辑后的过期值
+    loadSettings();
+  }
+  function closeSettings() {
+    el.settings.classList.add("hidden");
+    if (el.btnSettings) el.btnSettings.classList.remove("active");
+  }
+  function toggleSettings() {
+    if (el.settings.classList.contains("hidden")) openSettings();
+    else closeSettings();
+  }
+  function settingsOpen() {
+    return !el.settings.classList.contains("hidden");
   }
 
   /* ---------- 事件绑定 ---------- */
   function bindEvents() {
     $("btn-send").addEventListener("click", () => send());
-    $("btn-settings").addEventListener("click", () => {
-      el.settings.classList.toggle("hidden");
+    // ⚙ 在底部输入栏：点开设置；再点一次（或 ✕ / 关闭 / Esc / 点空白）收起
+    if (el.btnSettings) {
+      el.btnSettings.addEventListener("click", toggleSettings);
+    }
+    ["btn-settings-close", "btn-settings-close2"].forEach((id) => {
+      const btn = $(id);
+      if (btn) btn.addEventListener("click", closeSettings);
+    });
+    // 点设置面板以外的地方也关掉设置（输入框、chips、消息区都算"外面"）
+    document.addEventListener("mousedown", (ev) => {
+      if (!settingsOpen()) return;
+      const t = ev.target;
+      if (!t || !t.closest) return;
+      if (t.closest("#settings") || t.closest("#btn-settings")) return;
+      closeSettings();
     });
     $("btn-new").addEventListener("click", clearConversation);
     $("askgpt-save-btn").addEventListener("click", saveLastAnswerAsNote);
@@ -1113,7 +1220,7 @@
         send();
       }
     });
-    // 面板里框选文字（上下文卡片 / AI 回答）→ 自动成为「选中段落」
+    // 面板里框选文字（AI 回答里）→ 自动成为「选中段落」
     document.addEventListener("mouseup", () => {
       // 等浏览器把选区更新完
       setTimeout(capturePanelSelection, 0);
@@ -1121,48 +1228,26 @@
     if (el.focusClear) {
       el.focusClear.addEventListener("click", () => {
         focusSel = "";
-        updateContextView();
+        updateContextBadges();
         persistSession();
       });
     }
     document.querySelectorAll(".chip").forEach((c) => {
       c.addEventListener("click", () => send(c.dataset.q));
     });
-    el.ctxCollapse.addEventListener("click", () => {
-      const body = $("context-body");
-      const hidden = body.style.display === "none";
-      body.style.display = hidden ? "" : "none";
-      el.ctxCollapse.textContent = hidden ? "收起 ▴" : "展开 ▾";
-    });
-    el.ctxText.addEventListener("dblclick", () => {
-      // 用 title（原始纯文本）填充编辑框，避免上下标标记丢失
-      el.ctxEdit.value = el.ctxText.title || el.ctxText.textContent;
-      el.ctxEdit.style.display = "";
-      el.ctxText.style.display = "none";
-      el.ctxEdit.focus();
-    });
-    el.ctxEdit.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape") {
-        el.ctxEdit.style.display = "none";
-        el.ctxText.style.display = "";
-        // 手动编辑过的上下文就是要发给 AI 的上下文
-        paperText = el.ctxEdit.value;
-        paperChars = paperText.length;
-        sessionBase = null;
-        sessionBaseText = "";
-        fullRenderKey = "";
-        updateContextView();
-        persistSession();
-      }
-    });
-    // Esc 隐藏面板（调主进程隐藏 iframe）
+    // Esc：设置开着时只关设置；否则隐藏整个面板
     document.addEventListener("keydown", (ev) => {
-      if (ev.key === "Escape") {
-        try {
-          const g = getAskGPT();
-          if (g && g.hidePopup) g.hidePopup();
-        } catch (e) {}
+      if (ev.key !== "Escape") return;
+      if (settingsOpen()) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeSettings();
+        return;
       }
+      try {
+        const g = getAskGPT();
+        if (g && g.hidePopup) g.hidePopup();
+      } catch (e) {}
     });
   }
 

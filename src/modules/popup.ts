@@ -134,13 +134,24 @@ export async function openAskPopup() {
  */
 function ensurePanel(mainWin: Window) {
   const PANEL_PREF = "extensions.askgpt.panelPos";
+  const SIZE_PREF = "extensions.askgpt.panelSize";
   const doc: any = (mainWin as any).document;
+  const frame = doc.getElementById(
+    "askgpt-panel-frame",
+  ) as HTMLIFrameElement | null;
   let wrap = doc.getElementById("askgpt-panel-wrap") as HTMLDivElement;
 
+  // 面板尺寸可配置（设置里改完保存会立即改 iframe；这里兜底/应用外部改动）
+  const size = readPanelSize(SIZE_PREF, mainWin);
+
   if (wrap) {
-    // 已存在：直接显示
+    // 已存在：直接显示，并同步最新尺寸
     wrap.style.display = "flex";
     wrap.style.zIndex = "2147483647";
+    if (frame) {
+      frame.style.width = size.width + "px";
+      frame.style.height = size.height + "px";
+    }
     return wrap;
   }
 
@@ -165,14 +176,14 @@ function ensurePanel(mainWin: Window) {
       "box-shadow:0 8px 32px rgba(0,0,0,.28);overflow:hidden;",
   );
 
-  // 拖拽标题栏
+  // 拖拽标题栏（只留一条细栏，把高度让给对话区）
   const bar = doc.createElement("div");
   bar.id = "askgpt-panel-bar";
   bar.setAttribute(
     "style",
-    "height:28px;background:#171d28;color:#fff;display:flex;" +
-      "align-items:center;justify-content:space-between;padding:0 10px;" +
-      "cursor:move;user-select:none;font:12px sans-serif;",
+    "height:22px;background:#171d28;color:#fff;display:flex;" +
+      "align-items:center;justify-content:space-between;padding:0 8px;" +
+      "cursor:move;user-select:none;font:11px sans-serif;",
   );
   const label = doc.createElement("span");
   label.textContent = "✎ AskGPT";
@@ -180,7 +191,7 @@ function ensurePanel(mainWin: Window) {
   closeBtn.textContent = "✕";
   closeBtn.setAttribute(
     "style",
-    "cursor:pointer;padding:0 6px;opacity:.8;font-size:13px;",
+    "cursor:pointer;padding:0 6px;opacity:.8;font-size:12px;line-height:1;",
   );
   closeBtn.title = "关闭";
   closeBtn.addEventListener("click", () => hideAskPopup());
@@ -193,7 +204,11 @@ function ensurePanel(mainWin: Window) {
   panel.src = "chrome://askgpt/content/popup.xhtml";
   panel.setAttribute(
     "style",
-    "width:540px;height:600px;border:none;background:#fff;display:block;",
+    "width:" +
+      size.width +
+      "px;height:" +
+      size.height +
+      "px;border:none;background:#fff;display:block;",
   );
 
   wrap.appendChild(bar);
@@ -250,6 +265,47 @@ function ensurePanel(mainWin: Window) {
   });
 
   return wrap;
+}
+
+/**
+ * 面板尺寸：可配置项 extensions.askgpt.panelSize，取值 "720x860"（也兼容 JSON）。
+ * 默认 720×860；并夹在主窗口可视范围内，避免超出屏幕。
+ */
+function readPanelSize(prefName: string, mainWin: Window) {
+  let w = 720;
+  let h = 860;
+  try {
+    const raw = Zotero.Prefs.get(prefName);
+    let parsed: any = null;
+    if (raw) {
+      const s = String(raw).trim();
+      if (s.startsWith("{")) {
+        const o = JSON.parse(s);
+        parsed = { w: o.w ?? o.width, h: o.h ?? o.height };
+      } else {
+        const m = s.match(/(\d+)\s*[x×,;\s]\s*(\d+)/i);
+        if (m) parsed = { w: parseFloat(m[1]), h: parseFloat(m[2]) };
+      }
+    }
+    if (parsed && parsed.w && parsed.h) {
+      w = parsed.w;
+      h = parsed.h;
+    }
+  } catch (e) {}
+
+  const clamp = (v: number, lo: number, hi: number) =>
+    Math.max(lo, Math.min(hi, v));
+  try {
+    const win: any = mainWin;
+    const iw = win.innerWidth || 1200;
+    const ih = win.innerHeight || 900;
+    w = clamp(w, 420, Math.max(420, Math.min(1600, iw - 40)));
+    h = clamp(h, 360, Math.max(360, Math.min(1600, ih - 60)));
+  } catch (e) {
+    w = clamp(w, 420, 1600);
+    h = clamp(h, 360, 1600);
+  }
+  return { width: Math.round(w), height: Math.round(h) };
 }
 
 /** 把状态同时存到 addon.data.popupState 并推给面板 iframe（幂等） */

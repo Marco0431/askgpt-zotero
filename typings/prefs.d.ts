@@ -13,6 +13,8 @@ declare namespace _ZoteroTypes {
       "temperature": number;
       "webSearch": boolean;
       "contextSource": string;
+      "fontSize": number;
+      "panelSize": string;
       "systemPrompt": string;
     };
   }
