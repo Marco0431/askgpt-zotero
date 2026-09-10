@@ -5,3 +5,5 @@ node_modules
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+# 随插件打包的第三方库（KaTeX / markdown-it），已是压缩产物
+addon/content/vendor

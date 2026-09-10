@@ -5,6 +5,10 @@ import zotero from "@zotero-plugin/eslint-config";
 export default zotero({
   overrides: [
     {
+      // 随插件打包的第三方库（KaTeX / markdown-it）：压缩产物，不参与 lint
+      ignores: ["addon/content/vendor/**"],
+    },
+    {
       files: ["**/*.ts"],
       rules: {
         // We disable this rule here because the template
@@ -15,7 +19,10 @@ export default zotero({
     {
       // 手写的浏览器脚本（iframe 内运行，window/fetch 等是浏览器全局）
       // 与模板对 bootstrap.js 的处理一致
-      files: ["**/addon/content/scripts/popup.js"],
+      files: [
+        "**/addon/content/scripts/popup.js",
+        "**/addon/content/scripts/mathrender.js",
+      ],
       rules: {
         "no-undef": "off",
         "no-unused-vars": "off",

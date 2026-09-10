@@ -133,6 +133,19 @@
   let controller = null; // AbortController 用于停止
   let busy = false;
 
+  // 整篇文献（主进程读取后推送过来）——始终作为固定前缀发送
+  let paperText = "";
+  let paperLabel = "";
+  let paperChars = 0;
+  let paperTruncated = false;
+  let paperTitle = "";
+  let paperLoading = false;
+  // 当前选中段落——只作为「本次问题的焦点」，不会顶掉全文
+  let focusSel = "";
+  // 全文预览缓存（避免每次选中变化都重渲染 10 万字）
+  let fullRenderKey = "";
+  let lastStreamRender = 0;
+
   /* ---------- 主进程会话存取 ---------- */
   // 会话存在 Zotero.AskGPT.data.sessions[sessionKey]，面板隐藏再开不丢。
   // 面板是主窗口内的 iframe，通过 frameElement.ownerGlobal 拿主窗口的 Zotero。
@@ -165,12 +178,27 @@
     sessionKey = (session && session.key) || "";
     sessionBase = (session && session.base) || null;
     messages = (session && session.history) || [];
+    // 主进程会话里带着上次读到的全文（面板重开时不必等重新读盘）
+    if (!paperText && session && session.contextText) {
+      paperText = session.contextText;
+      paperLabel = session.contextLabel || "";
+      paperChars = paperText.length;
+      fullRenderKey = "";
+    }
+    if (!paperTitle && session && session.itemTitle) {
+      paperTitle = session.itemTitle;
+    }
     // 恢复 UI 历史（user/assistant 气泡，跳过 tool 轮）
     el.messages.innerHTML = "";
     el.emptyTip.style.display = messages.length ? "none" : "";
     for (const m of messages) {
       if (m.role === "user") {
-        appendMessage("user", m.content || "");
+        appendMessage(
+          "user",
+          m.q || m.content || "",
+          false,
+          m.focus ? "含选中段落" : "",
+        );
       } else if (m.role === "assistant" && m.content) {
         const ui = appendMessage("assistant", m.content, false);
         if (ui && ui.bubble) ui.bubble.innerHTML = renderMarkdown(m.content);
@@ -187,15 +215,29 @@
     const g = getAskGPT();
     if (!g || !g.data || !sessionKey) return;
     if (!g.data.sessions) g.data.sessions = {};
-    g.data.sessions[sessionKey] = {
+    // 合并写回：主进程在同一个 session 上还存了 contextText / selection 等字段，
+    // 不能被面板覆盖掉
+    const prev = g.data.sessions[sessionKey] || {};
+    const patch = {
       key: sessionKey,
       base: sessionBase,
       history: messages,
+      selection: focusSel,
+      itemTitle: paperTitle || prev.itemTitle || "",
+      chars: paperChars,
+      truncated: paperTruncated,
+      hasFullText: !!paperText,
     };
+    // 没读到全文时不要把主进程写好的 contextText 抹掉
+    if (paperText) {
+      patch.contextText = paperText;
+      patch.contextLabel = paperLabel;
+    }
+    g.data.sessions[sessionKey] = Object.assign({}, prev, patch);
   }
   function buildSessionBaseFromState(session) {
     const contextText =
-      session && session.contextText ? session.contextText : "";
+      (session && session.contextText) || paperText || focusSel || "";
     if (!contextText) return null;
     const sysText = el.setSys.value.trim() || DEFAULT_SYSTEM_PROMPT;
     return [
@@ -209,12 +251,9 @@
     ];
   }
   function buildSessionBase() {
-    // 从当前上下文构建固定前缀：system + 全文（或选中文字）
-    // title 保存的是原始纯文本（含 ^/_ 上下标标记），textContent 是渲染后的
-    let contextText =
-      el.ctxEdit.style.display !== "none"
-        ? el.ctxEdit.value
-        : el.ctxText.title || el.ctxText.textContent;
+    // 固定前缀一律用整篇文献（而不是当前显示的选中文字）：
+    // 同一篇文献反复提问前缀不变 → API 前缀缓存持续命中
+    let contextText = paperText || focusSel || "";
     contextText = (contextText || "").trim();
     if (!contextText) return null;
     const sysText = el.setSys.value.trim() || DEFAULT_SYSTEM_PROMPT;
@@ -230,12 +269,9 @@
   }
 
   function sessionFingerprint() {
-    // 上下文的指纹：用当前显示的文本前 200 字符 + 长度
-    const t =
-      el.ctxEdit.style.display !== "none"
-        ? el.ctxEdit.value
-        : el.ctxText.title || el.ctxText.textContent;
-    return (t || "").slice(0, 200) + ":" + (t || "").length;
+    // 上下文的指纹：用整篇文献的前 200 字符 + 长度
+    const t = paperText || focusSel || "";
+    return t.slice(0, 200) + ":" + t.length;
   }
 
   /* ---------- DOM ---------- */
@@ -247,6 +283,15 @@
     ctxItem: $("context-item"),
     ctxEdit: $("context-edit"),
     ctxCollapse: $("ctx-collapse"),
+    ctxMeta: $("context-meta"),
+    ctxWarn: $("context-warn"),
+    ctxFocus: $("context-focus"),
+    ctxFocusWrap: $("context-focus-wrap"),
+    ctxFullLabel: $("context-full-label"),
+    ctxHint: $("context-hint"),
+    tagPaper: $("tag-paper"),
+    tagFocus: $("tag-focus"),
+    focusClear: $("focus-clear"),
     input: $("input"),
     btnSend: $("btn-send"),
     btnStop: $("btn-stop"),
@@ -288,68 +333,129 @@
     el.modelBadge.textContent = el.setModel.value.trim() || "…";
   }
 
-  /* ---------- 选中文本 / 上下文来源 ---------- */
-  // 新契约：refresh(payload)，payload = { selection, itemTitle, contextText, contextLabel }
+  /* ---------- 上下文来源（整篇文献 + 选中段落） ---------- */
+  // 主进程契约：refresh(payload)
+  //   payload = { loading, selection, itemTitle, contextText, contextLabel,
+  //               contextChars, truncated, session }
   // 兼容旧调用：若传入字符串，直接当作 selection
+  function getPopupState() {
+    try {
+      return (
+        (Zotero &&
+          Zotero.AskGPT &&
+          Zotero.AskGPT.data &&
+          Zotero.AskGPT.data.popupState) ||
+        null
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
   function refresh(payload) {
     let selection = "";
     let itemTitle = "";
     let contextText = "";
     let contextLabel = "";
+    let contextChars = 0;
+    let truncated = false;
+    let loading = false;
     let session = null;
+
+    const ps = getPopupState();
 
     if (typeof payload === "string") {
       selection = payload;
-      itemTitle =
-        (Zotero &&
-          Zotero.AskGPT &&
-          Zotero.AskGPT.data &&
-          Zotero.AskGPT.data.popupState &&
-          Zotero.AskGPT.data.popupState.itemTitle) ||
-        "";
-      session =
-        (Zotero &&
-          Zotero.AskGPT &&
-          Zotero.AskGPT.data &&
-          Zotero.AskGPT.data.popupState &&
-          Zotero.AskGPT.data.popupState.session) ||
-        null;
+      itemTitle = (ps && ps.itemTitle) || "";
+      session = (ps && ps.session) || null;
     } else if (payload && typeof payload === "object") {
       selection = payload.selection || "";
       itemTitle = payload.itemTitle || "";
       contextText = payload.contextText || "";
       contextLabel = payload.contextLabel || "";
+      contextChars = payload.contextChars || contextText.length;
+      truncated = !!payload.truncated;
+      loading = !!payload.loading;
       session = payload.session || null;
-    } else if (Zotero && Zotero.AskGPT) {
-      // 无参调用：回退到 Zotero.AskGPT.data.popupState（模板结构）
-      const ps =
-        Zotero.AskGPT.data && Zotero.AskGPT.data.popupState
-          ? Zotero.AskGPT.data.popupState
-          : null;
-      if (ps) {
-        if (typeof ps.selection === "string") selection = ps.selection;
-        if (typeof ps.itemTitle === "string") itemTitle = ps.itemTitle;
-        if (typeof ps.contextText === "string") contextText = ps.contextText;
-        if (typeof ps.contextLabel === "string") contextLabel = ps.contextLabel;
-        if (ps.session) session = ps.session;
-      }
+    } else if (ps) {
+      // 无参调用：回退到主进程共享状态
+      if (typeof ps.selection === "string") selection = ps.selection;
+      if (typeof ps.itemTitle === "string") itemTitle = ps.itemTitle;
+      if (typeof ps.contextText === "string") contextText = ps.contextText;
+      if (typeof ps.contextLabel === "string") contextLabel = ps.contextLabel;
+      if (ps.contextChars) contextChars = ps.contextChars;
+      if (ps.truncated) truncated = true;
+      if (ps.loading) loading = true;
+      if (ps.session) session = ps.session;
     }
 
+    // 整篇文献：读到才更新；loading 阶段保留上一次的内容，界面不闪
     if (contextText) {
-      // 无 PDF 选中时读到附件全文：显示全文并标注来源
-      setContextText(contextText);
-      const parts = [];
-      if (contextLabel) parts.push(contextLabel);
-      if (itemTitle) parts.push(itemTitle);
-      el.ctxItem.textContent = parts.length ? "来源：" + parts.join(" · ") : "";
-    } else {
-      // 默认：PDF 选中文字，来源为条目标题
-      setContextText(selection);
-      el.ctxItem.textContent = itemTitle || "";
+      if (contextText !== paperText) fullRenderKey = "";
+      paperText = contextText;
+      paperLabel = contextLabel || paperLabel;
+      paperChars = contextChars || contextText.length;
+      paperTruncated = truncated;
+    }
+    if (itemTitle) paperTitle = itemTitle;
+    paperLoading = loading;
+    if (selection) focusSel = String(selection).trim();
+
+    // 先恢复会话（可能带回上次的全文），再刷新上下文卡片
+    loadSession(session);
+    updateContextView();
+  }
+
+  /** 把「整篇文献 + 选中段落」的状态画到上下文卡片 */
+  function updateContextView() {
+    el.tagPaper.classList.toggle("hidden", !paperText);
+    el.tagFocus.classList.toggle("hidden", !focusSel);
+    if (focusSel) {
+      const n = focusSel.length;
+      el.tagFocus.textContent =
+        "选中段落 " + (n > 999 ? Math.round(n / 1000) + "k" : n) + " 字";
     }
 
-    // 绑定主进程会话：同一篇文章恢复历史（弹窗关闭再开不丢）
-    loadSession(session);
+    if (paperLoading) {
+      el.ctxMeta.textContent = "⏳ 正在读取整篇文献…";
+    } else if (paperText) {
+      el.ctxMeta.textContent =
+        (paperLabel ? paperLabel + " · " : "") +
+        paperChars.toLocaleString() +
+        " 字" +
+        (paperTruncated ? "（已截断）" : "");
+    } else {
+      el.ctxMeta.textContent = "";
+    }
+
+    el.ctxItem.textContent = paperTitle ? "📄 " + paperTitle : "";
+
+    if (!paperLoading && !paperText) {
+      el.ctxWarn.textContent =
+        "未读到文献全文（扫描版 PDF / 未选中条目？）——本次只会发送选中段落。";
+      el.ctxWarn.classList.remove("hidden");
+    } else {
+      el.ctxWarn.classList.add("hidden");
+    }
+
+    // 当前选中段落
+    el.ctxFocusWrap.classList.toggle("hidden", !focusSel);
+    if (focusSel) el.ctxFocus.innerHTML = renderContextText(focusSel);
+
+    // 全文预览：内容变了才重渲染（十万字重排很贵，选中变化时不做）
+    const key = paperText
+      ? paperText.length + ":" + paperText.slice(0, 48)
+      : "";
+    if (key !== fullRenderKey) {
+      fullRenderKey = key;
+      setContextText(paperText || focusSel || "");
+    }
+
+    el.ctxFullLabel.textContent = paperText
+      ? "全文（已作为上下文发送给 AI）"
+      : focusSel
+        ? "选中段落（作为上下文发送）"
+        : "上下文";
   }
 
   /* ---------- 渲染（轻量 markdown） ---------- */
@@ -365,15 +471,38 @@
     t = t.replace(/_([^\s_{}()（）,;；。，]+)/g, "<sub>$1</sub>");
     return t;
   }
-  // 上下文原文区渲染：纯文本 + 上下标
+  // 上下文原文区渲染：真公式（KaTeX）+ 其余原样；渲染器不可用时退回上下标兜底
   function renderContextText(text) {
+    const R = window.AskGPTRender;
+    if (R && R.renderPlainWithMath) {
+      try {
+        return R.renderPlainWithMath(text || "");
+      } catch (e) {}
+    }
     return applyScripts(escapeHtml(text || ""));
   }
   function setContextText(text) {
     el.ctxText.innerHTML = renderContextText(text);
     el.ctxText.title = text || "";
   }
+
+  /**
+   * AI 回答渲染：优先用 mathrender.js（markdown-it + KaTeX，随插件离线打包），
+   * 拿不到（vendor 没加载）时退回内置的极简渲染，保证不白屏。
+   */
   function renderMarkdown(text) {
+    const R = window.AskGPTRender;
+    if (R && R.renderMarkdown) {
+      try {
+        return R.renderMarkdown(text || "");
+      } catch (e) {
+        if (Zotero && Zotero.logError) Zotero.logError(e);
+      }
+    }
+    return renderMarkdownFallback(text);
+  }
+
+  function renderMarkdownFallback(text) {
     const src = String(text || "");
     const codeBlocks = [];
     const inlineCodes = [];
@@ -460,18 +589,38 @@
     t = t.replace(/@@FB(\d+)@@/g, (_m, i) => formulas[+i]);
     return t;
   }
-  function appendMessage(role, text, isStream) {
+  function appendMessage(role, text, isStream, tag) {
     el.emptyTip.style.display = "none";
     const wrap = document.createElement("div");
     wrap.className = `msg ${role}` + (isStream ? " streaming" : "");
     const bubble = document.createElement("div");
     bubble.className = "bubble";
-    if (role === "assistant") bubble.innerHTML = renderMarkdown(text) || "…";
-    else bubble.textContent = text;
+    if (role === "assistant") {
+      bubble.innerHTML = renderMarkdown(text) || "…";
+      enhanceScripts(bubble);
+    } else {
+      bubble.textContent = text;
+    }
     wrap.appendChild(bubble);
+    if (tag) {
+      const t = document.createElement("span");
+      t.className = "msg-tag";
+      t.textContent = tag;
+      wrap.appendChild(t);
+    }
     el.messages.appendChild(wrap);
     el.messages.scrollTop = el.messages.scrollHeight;
     return { wrap, bubble };
+  }
+
+  /** 裸上下标兜底（F_t / J^T）；KaTeX 已渲染的部分会自动跳过 */
+  function enhanceScripts(root) {
+    const R = window.AskGPTRender;
+    if (R && R.enhanceScripts) {
+      try {
+        R.enhanceScripts(root);
+      } catch (e) {}
+    }
   }
 
   /* ---------- 流式请求（OpenAI 兼容） ---------- */
@@ -565,6 +714,18 @@
     return { toolCalls: calls, reasoning };
   }
 
+  /** 只保留 OpenAI 兼容接口认识的字段（q / focus 这类 UI 字段不能发出去） */
+  function sanitizeMessages(list) {
+    return (list || []).map((m) => {
+      const out = { role: m.role };
+      if (m.content !== undefined) out.content = m.content;
+      if (m.tool_calls) out.tool_calls = m.tool_calls;
+      if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+      if (m.reasoning_content) out.reasoning_content = m.reasoning_content;
+      return out;
+    });
+  }
+
   /* ---------- 主循环：问答 + 工具 ---------- */
   async function send(questionText) {
     if (busy) return;
@@ -574,8 +735,8 @@
       setStatus("请先在上方 ⚙ 设置里填写 API Key");
       return;
     }
-    if (!el.ctxText.textContent.trim() && !el.ctxEdit.value.trim()) {
-      setStatus("当前没有上下文原文");
+    if (!paperText && !focusSel) {
+      setStatus("没有上下文：先在 Zotero 里打开文献（或选中条目）再提问");
       return;
     }
 
@@ -590,13 +751,23 @@
     el.btnSend.textContent = "发送中…";
     el.btnStop.classList.remove("hidden");
     el.input.value = "";
-    appendMessage("user", q);
+    const focus = (focusSel || "").trim();
+    appendMessage("user", q, false, focus ? "含选中段落" : "");
     setStatus("思考中…");
 
     controller = new AbortController();
 
-    // 追加本次问题（不动前缀，保持缓存命中）
-    messages.push({ role: "user", content: q });
+    // 追加本次问题（不动前缀，保持缓存命中）。
+    // 选中段落作为「焦点」随问题一起发，全文仍在前缀里。
+    const userContent = focus
+      ? `【选中段落】\n${focus}\n\n【我的问题】\n${q}`
+      : q;
+    messages.push({
+      role: "user",
+      content: userContent,
+      q,
+      focus: focus || undefined,
+    });
 
     const maxIter = 4;
     // 整个对话流程共用一个 assistant 气泡，避免工具轮产生空消息
@@ -607,6 +778,10 @@
     const renderAcc = () => {
       rafId = null;
       if (!ui) return;
+      const now = Date.now();
+      // KaTeX + Markdown 全量重渲染较贵，流式期间按 ~140ms 节流
+      if (now - lastStreamRender < 140) return;
+      lastStreamRender = now;
       ui.bubble.innerHTML =
         renderMarkdown(acc) + '<span class="cursor"></span>';
       el.messages.scrollTop = el.messages.scrollHeight;
@@ -623,6 +798,7 @@
       }
       if (ui) {
         ui.bubble.innerHTML = renderMarkdown(acc);
+        enhanceScripts(ui.bubble);
         ui.wrap.classList.remove("streaming");
       }
     };
@@ -647,7 +823,9 @@
           model,
           temperature,
           stream: true,
-          messages: sessionBase ? [...sessionBase, ...messages] : messages,
+          messages: sanitizeMessages(
+            sessionBase ? [...sessionBase, ...messages] : messages,
+          ),
         };
         if (useTools) payload.tools = TOOLS;
 
@@ -837,7 +1015,10 @@
 
   /* ---------- 实时选中同步（事件驱动） ---------- */
   // 主进程 selectionchange 防抖后主动调用本方法，弹窗无需轮询。
-  // 收到新选中：更新原文区 + 会话自动切到新选中（不用关窗重开）。
+  //
+  // 关键语义：选中只是「本次提问的焦点」，不会顶掉整篇文献，
+  // 也不会清空会话历史（旧版本在这里把上下文换成选中文字，
+  // 于是"整篇论文从没进过上下文"）。
   function updateLiveSelection(newSel) {
     try {
       newSel = (newSel || "").toString().trim();
@@ -845,24 +1026,33 @@
       // 用户手动编辑原文框时不覆盖
       const editing = el.ctxEdit && el.ctxEdit.style.display !== "none";
       if (editing) return;
-      const curText =
-        el.ctxText && (el.ctxText.title || el.ctxText.textContent)
-          ? (el.ctxText.title || el.ctxText.textContent).trim()
-          : "";
-      if (newSel === curText) return;
-
-      const g = getAskGPT();
-      // 更新原文区（有选中就优先显示选中，覆盖附件全文模式）
-      setContextText(newSel);
-      const title = (
-        g && g.data && g.data.readerTitle ? g.data.readerTitle : ""
-      ).toString();
-      el.ctxItem.textContent = title;
-      // 重建会话：新选中 = 新上下文
-      messages = [];
-      sessionBase = buildSessionBase();
+      if (newSel === (focusSel || "").trim()) return;
+      focusSel = newSel;
+      updateContextView();
       persistSession();
       setStatus("");
+    } catch (e) {}
+  }
+
+  /** 面板内框选文字（上下文卡片 / AI 回答里）→ 作为本次提问的选中段落 */
+  function capturePanelSelection() {
+    try {
+      const sel = window.getSelection ? window.getSelection() : null;
+      if (!sel || sel.isCollapsed) return;
+      const text = (sel.toString() || "").trim();
+      if (!text || text.length > 8000) return;
+      const node = sel.anchorNode;
+      const host =
+        node && node.nodeType === 1 ? node : node ? node.parentElement : null;
+      if (host && host.closest) {
+        if (host.closest("#input, #settings, input, textarea, #statusline")) {
+          return;
+        }
+      }
+      if (text === (focusSel || "").trim()) return;
+      focusSel = text;
+      updateContextView();
+      persistSession();
     } catch (e) {}
   }
 
@@ -882,6 +1072,18 @@
         send();
       }
     });
+    // 面板里框选文字（上下文卡片 / AI 回答）→ 自动成为「选中段落」
+    document.addEventListener("mouseup", () => {
+      // 等浏览器把选区更新完
+      setTimeout(capturePanelSelection, 0);
+    });
+    if (el.focusClear) {
+      el.focusClear.addEventListener("click", () => {
+        focusSel = "";
+        updateContextView();
+        persistSession();
+      });
+    }
     document.querySelectorAll(".chip").forEach((c) => {
       c.addEventListener("click", () => send(c.dataset.q));
     });
@@ -923,6 +1125,12 @@
     clearConversation,
     saveNote: saveLastAnswerAsNote,
     updateLiveSelection,
+    capturePanelSelection,
+    // 调试用：渲染器是否就绪（markdown-it / KaTeX 是否加载成功）
+    rendererReady() {
+      const R = window.AskGPTRender;
+      return R && R.ready ? R.ready : { markdown: false, katex: false };
+    },
   };
 
   // 启动
@@ -931,5 +1139,17 @@
     bindEvents();
     refresh();
     el.input.focus();
+    // 渲染依赖自检：加载失败时提示（不至于静默退回极简渲染）
+    try {
+      const R = window.AskGPTRender;
+      if (!R || !R.ready || !R.ready.katex || !R.ready.markdown) {
+        const miss = [];
+        if (!R || !R.ready || !R.ready.markdown) miss.push("markdown-it");
+        if (!R || !R.ready || !R.ready.katex) miss.push("KaTeX");
+        setStatus(
+          "渲染依赖未加载：" + miss.join(" / ") + "（公式会以源码显示）",
+        );
+      }
+    } catch (e) {}
   });
 })();

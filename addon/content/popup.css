@@ -432,6 +432,15 @@ body {
   border-top-left-radius: 4px;
   color: #d7dbe4;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  /* markdown-it 会输出 <p>/<ul>/<table> 等块级元素，
+     这里不能用 pre-wrap（否则块之间的换行会被重复渲染成空行） */
+  white-space: normal;
+}
+.msg.assistant .bubble p {
+  margin: 4px 0;
+}
+.msg.assistant .bubble pre {
+  margin: 8px 0;
 }
 
 /* ---------- AI 气泡内 markdown 渲染 ---------- */
@@ -516,6 +525,20 @@ body {
   height: 4px;
   border-radius: 50%;
   background: #6d8bff;
+}
+/* 无序列表用自绘圆点，去掉默认 marker；有序列表保留数字 */
+.msg.assistant .bubble ul li {
+  list-style: none;
+}
+.msg.assistant .bubble ol {
+  list-style: decimal;
+}
+.msg.assistant .bubble ol li {
+  list-style: decimal;
+  padding-left: 0;
+}
+.msg.assistant .bubble ol li::before {
+  display: none;
 }
 
 .msg.assistant .bubble table {
@@ -725,6 +748,123 @@ button.primary:disabled {
   color: #6b7280;
   min-height: 20px;
   background: rgba(255, 255, 255, 0.02);
+}
+
+/* ---------- 数学公式（KaTeX，离线打包） ---------- */
+.ag-math-inline {
+  display: inline-block;
+  vertical-align: baseline;
+  max-width: 100%;
+}
+.ag-math-block {
+  display: block;
+  margin: 8px 0;
+  padding: 2px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+.katex {
+  font-size: 1.06em;
+}
+.katex-display {
+  margin: 6px 0;
+}
+/* 上下文预览里的公式靠左、紧凑一些 */
+#context-text .ag-math-block,
+#context-focus .ag-math-block {
+  text-align: left;
+  margin: 4px 0;
+  padding: 0;
+}
+
+/* ---------- 上下文卡片：标签 / 元信息 / 选中段落 ---------- */
+#context-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  margin-right: 8px;
+  min-width: 0;
+}
+.tag {
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(109, 132, 255, 0.45);
+  background: rgba(109, 132, 255, 0.12);
+  color: #a9baff;
+  white-space: nowrap;
+  flex: none;
+}
+#tag-paper {
+  border-color: rgba(74, 222, 128, 0.4);
+  background: rgba(74, 222, 128, 0.1);
+  color: #86e0a8;
+}
+#context-meta {
+  font-size: 10.5px;
+  color: #7f8798;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: #8b93a5;
+  margin: 8px 0 4px;
+}
+#context-focus {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 96px;
+  overflow: auto;
+  background: rgba(109, 132, 255, 0.07);
+  border: 1px solid rgba(109, 132, 255, 0.35);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font:
+    11.5px/1.6 ui-monospace,
+    "Cascadia Code",
+    Consolas,
+    "Courier New",
+    monospace;
+  color: #d3dbf0;
+}
+.ctx-warn {
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: #e6bb63;
+  background: rgba(230, 187, 99, 0.1);
+  border: 1px solid rgba(230, 187, 99, 0.32);
+  border-radius: 8px;
+  padding: 6px 9px;
+  margin-bottom: 6px;
+}
+#context-hint {
+  font-size: 10px;
+  line-height: 1.5;
+  color: #646d7d;
+  margin-top: 7px;
+}
+
+/* 消息上的小标签（如「含选中段落」） */
+.msg-tag {
+  align-self: flex-end;
+  font-size: 10px;
+  color: #9aa4bb;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin: 0 6px 2px;
+  white-space: nowrap;
+  flex: none;
 }
 
 /* ---------- 动效降级 ---------- */
