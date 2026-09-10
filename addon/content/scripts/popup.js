@@ -142,6 +142,8 @@
   let paperLoading = false;
   // 当前选中段落——只作为「本次问题的焦点」，不会顶掉全文
   let focusSel = "";
+  // 前缀是从哪份文本建的（全文晚到 / 被编辑过时要作废重建）
+  let sessionBaseText = "";
   // 全文预览缓存（避免每次选中变化都重渲染 10 万字）
   let fullRenderKey = "";
   let lastStreamRender = 0;
@@ -177,6 +179,9 @@
     // 从主进程会话恢复：前缀 + 历史
     sessionKey = (session && session.key) || "";
     sessionBase = (session && session.base) || null;
+    sessionBaseText = sessionBase
+      ? (session && session.baseText) || (session && session.contextText) || ""
+      : "";
     messages = (session && session.history) || [];
     // 主进程会话里带着上次读到的全文（面板重开时不必等重新读盘）
     if (!paperText && session && session.contextText) {
@@ -221,6 +226,7 @@
     const patch = {
       key: sessionKey,
       base: sessionBase,
+      baseText: sessionBaseText,
       history: messages,
       selection: focusSel,
       itemTitle: paperTitle || prev.itemTitle || "",
@@ -239,6 +245,11 @@
     const contextText =
       (session && session.contextText) || paperText || focusSel || "";
     if (!contextText) return null;
+    return makeSessionBase(contextText);
+  }
+  /** 固定前缀 = system + 整篇文献（同一篇文献反复提问前缀不变 → API 前缀缓存命中） */
+  function makeSessionBase(contextText) {
+    sessionBaseText = contextText;
     const sysText = el.setSys.value.trim() || DEFAULT_SYSTEM_PROMPT;
     return [
       { role: "system", content: sysText },
@@ -256,16 +267,7 @@
     let contextText = paperText || focusSel || "";
     contextText = (contextText || "").trim();
     if (!contextText) return null;
-    const sysText = el.setSys.value.trim() || DEFAULT_SYSTEM_PROMPT;
-    return [
-      { role: "system", content: sysText },
-      {
-        role: "user",
-        content:
-          `【文献原文】\n\`\`\`\n${contextText}\n\`\`\`\n\n` +
-          `请记住以上文献内容。我后续的每一个问题都基于这篇文献，你只需针对我的问题作答，不需要重复说明上下文。`,
-      },
-    ];
+    return makeSessionBase(contextText);
   }
 
   function sessionFingerprint() {
@@ -391,7 +393,14 @@
 
     // 整篇文献：读到才更新；loading 阶段保留上一次的内容，界面不闪
     if (contextText) {
-      if (contextText !== paperText) fullRenderKey = "";
+      if (contextText !== paperText) {
+        fullRenderKey = "";
+        // 全文晚到或被替换：之前可能用选中段落建过前缀，作废重建（历史保留）
+        if (sessionBase && sessionBaseText && sessionBaseText !== contextText) {
+          sessionBase = null;
+          sessionBaseText = "";
+        }
+      }
       paperText = contextText;
       paperLabel = contextLabel || paperLabel;
       paperChars = contextChars || contextText.length;
@@ -714,6 +723,22 @@
     return { toolCalls: calls, reasoning };
   }
 
+  /** rAF 节流（环境缺少 rAF 时退回 setTimeout，避免整条回答失败） */
+  function scheduleFrame(fn) {
+    if (typeof window.requestAnimationFrame === "function") {
+      return { raf: true, id: window.requestAnimationFrame(fn) };
+    }
+    return { raf: false, id: setTimeout(fn, 16) };
+  }
+  function cancelFrame(handle) {
+    if (!handle) return;
+    if (handle.raf && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(handle.id);
+    } else {
+      clearTimeout(handle.id);
+    }
+  }
+
   /** 只保留 OpenAI 兼容接口认识的字段（q / focus 这类 UI 字段不能发出去） */
   function sanitizeMessages(list) {
     return (list || []).map((m) => {
@@ -793,7 +818,7 @@
     // 流结束/停止时：取消未执行的渲染任务并输出最终结果（不带游标）
     const finishRender = () => {
       if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
+        cancelFrame(rafId);
         rafId = null;
       }
       if (ui) {
@@ -815,7 +840,7 @@
           ensureBubble();
           // rAF 节流：一个动画帧内只渲染一次，避免每 token 全量重渲染
           if (rafId === null) {
-            rafId = window.requestAnimationFrame(renderAcc);
+            rafId = scheduleFrame(renderAcc);
           }
         };
 
@@ -1104,7 +1129,14 @@
       if (ev.key === "Escape") {
         el.ctxEdit.style.display = "none";
         el.ctxText.style.display = "";
-        setContextText(el.ctxEdit.value);
+        // 手动编辑过的上下文就是要发给 AI 的上下文
+        paperText = el.ctxEdit.value;
+        paperChars = paperText.length;
+        sessionBase = null;
+        sessionBaseText = "";
+        fullRenderKey = "";
+        updateContextView();
+        persistSession();
       }
     });
     // Esc 隐藏面板（调主进程隐藏 iframe）
