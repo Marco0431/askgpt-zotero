@@ -211,6 +211,15 @@ body {
   background: rgba(74, 222, 128, 0.1);
   border: 1px solid rgba(74, 222, 128, 0.38);
 }
+/* 徽章文字放在内层 span 里：外层的 inline-flex 上做省略号不生效，
+   内层 flex item 才能 min-width:0 + ellipsis（窄面板不被顶出横向滚动条） */
+#ctx-text,
+#focus-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* 读不到全文：黄色告警（只发选中段落） */
 .ctx-badge.warn {
   color: #e6bb63;
@@ -851,7 +860,8 @@ button.secondary:hover {
   margin: 6px 0;
 }
 
-/* 消息上的小标签（如「含选中段落」） */
+/* 消息上的小标签（如「含选中段落」）—— 必须能被压缩：
+   .msg.user 里气泡已经占了 92%，标签不改就会被顶出横向滚动条 */
 .msg-tag {
   align-self: flex-start;
   font-size: 0.72em;
@@ -863,7 +873,158 @@ button.secondary:hover {
   padding: 0 7px;
   margin: 2px 6px 0;
   white-space: nowrap;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================================
+   多尺寸自适应 —— iframe 是独立 viewport，直接按自身尺寸适配
+   断点（与 popup.js 的 syncViewportClasses 数值一致）：
+     宽 > 1100px → 气泡限宽居中，避免一行过长
+     宽 < 560px  → 模型徽章 / 状态徽章只留图标或短文案
+     高 < 560px  → 顶部栏 / 徽章 / chips 全部压紧
+     高 < 440px  → 隐藏 chips 行，只留输入区 + 对话区
+   ============================================================ */
+
+/* ---------- 宽面板（> 1100px）：限制气泡最大宽度并居中 ---------- */
+@media (min-width: 1101px) {
+  #messages {
+    max-width: 1040px;
+    margin: 0 auto;
+  }
+  .msg.assistant .bubble {
+    max-width: 1000px;
+  }
+  .msg.user .bubble {
+    max-width: min(1000px, 92%);
+  }
+}
+
+/* ---------- 窄面板（< 560px）：顶部栏只留图标 / 短文案 ---------- */
+@media (max-width: 559px) {
+  #topbar {
+    padding: 4px 6px;
+    gap: 4px;
+    /* 兜底：任何情况下顶部栏都不产生横向滚动条 */
+    overflow: hidden;
+  }
+  /* 品牌区已有「✎」圆形 logo，窄面板里省掉 AskGPT 文字 */
+  #title {
+    display: none;
+  }
+  #brand {
+    gap: 4px;
+  }
+  #model-badge {
+    max-width: 64px;
+    padding: 0 5px;
+  }
+  .ctx-badge {
+    max-width: 88px;
+  }
+  .ctx-badge.focus {
+    max-width: 104px;
+    padding-right: 0;
+  }
+  #actions {
+    gap: 2px;
+  }
+  #askgpt-save-btn {
+    padding: 0 5px;
+    font-size: 0.74em;
+  }
+  /* 焦点徽章已经在顶部写明「选中 N 字」，气泡旁的标签在窄面板里省掉 */
+  .msg-tag {
+    display: none;
+  }
+  /* 字号 / 面板大小两列在窄面板里改为上下排，避免输入框被挤没 */
+  .form-row-inline {
+    flex-direction: column;
+    gap: 0;
+  }
+  #chat {
+    padding: 6px 8px 10px;
+  }
+  #empty-tip {
+    margin-top: 16px;
+    font-size: 0.9em;
+  }
+  .msg.assistant .bubble .md-code {
+    padding: 6px 8px;
+  }
+}
+
+/* ---------- 矮面板（< 560px 高）：顶部栏 / 徽章 / chips 全部压紧 ---------- */
+@media (max-height: 559px) {
+  #topbar {
+    padding: 2px 8px;
+  }
+  #logo {
+    width: 16px;
+    height: 16px;
+  }
+  #chips {
+    padding: 3px 10px 0;
+  }
+  .chip {
+    font-size: 0.74em;
+    line-height: 1.55;
+    padding: 0 8px;
+  }
+  #chat {
+    padding: 6px 10px 8px;
+  }
+  #messages .msg {
+    margin-bottom: 6px;
+  }
+  #empty-tip {
+    margin-top: 14px;
+  }
+  #inputbar {
+    padding: 5px 8px;
+  }
+  #input {
+    padding: 5px 9px;
+    max-height: 96px;
+  }
+  #btn-settings {
+    width: 28px;
+    height: 28px;
+  }
+  #statusline {
+    min-height: 15px;
+    padding: 2px 10px 3px;
+  }
+  /* 设置面板：头/底 sticky 保持不变，只把可用高度压一点，保证按钮永远可见 */
+  #settings {
+    margin: 6px 8px 0;
+    max-height: 58vh;
+  }
+}
+
+/* ---------- 极矮（< 440px 高）：隐藏 chips 行，只留输入区 + 对话区 ---------- */
+@media (max-height: 439px) {
+  #chips {
+    display: none;
+  }
+  #topbar {
+    padding: 1px 8px;
+  }
+  #chat {
+    padding: 4px 8px 6px;
+  }
+  #empty-tip {
+    margin-top: 8px;
+  }
+  #statusline {
+    min-height: 0;
+    padding: 1px 10px 2px;
+  }
+  #settings {
+    max-height: 52vh;
+  }
 }
 
 /* ---------- 动效降级 ---------- */

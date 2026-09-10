@@ -145,12 +145,15 @@ function ensurePanel(mainWin: Window) {
   const size = readPanelSize(SIZE_PREF, mainWin);
 
   if (wrap) {
-    // 已存在：直接显示，并同步最新尺寸
+    // 已存在：直接显示，并同步最新尺寸（含上次拖缩放把手改出的尺寸）
     wrap.style.display = "flex";
     wrap.style.zIndex = "2147483647";
+    wrap.style.width = size.width + "px";
     if (frame) {
       frame.style.width = size.width + "px";
       frame.style.height = size.height + "px";
+      // 上次记住了「又大又靠下」的尺寸时，别让它超出可视区（把手会被顶出窗外）
+      keepPanelInView(mainWin, wrap, size, PANEL_PREF);
     }
     return wrap;
   }
@@ -172,6 +175,9 @@ function ensurePanel(mainWin: Window) {
       (initLeft != null
         ? "left:" + initLeft + "px;top:" + initTop + "px;"
         : "right:24px;top:120px;") +
+      "width:" +
+      size.width +
+      "px;" +
       "display:flex;flex-direction:column;border-radius:12px;" +
       "box-shadow:0 8px 32px rgba(0,0,0,.28);overflow:hidden;",
   );
@@ -215,7 +221,61 @@ function ensurePanel(mainWin: Window) {
   wrap.appendChild(panel);
   doc.documentElement!.appendChild(wrap);
 
-  // 拖拽逻辑：拖 bar 移动 wrap，松手保存位置
+  // 缩放把手（右下角为主，另加右边缘 / 下边缘）：
+  // 放在主窗口的 wrap 里而不是 iframe 内部 —— 否则鼠标一移出 iframe 就丢事件。
+  // 拖动时给 iframe 关掉 pointer-events，鼠标事件全程留在主窗口。
+  ensurePanelStyle(doc);
+  let resizing: ResizeDir | null = null;
+  let rzStartX = 0,
+    rzStartY = 0,
+    rzBaseW = 0,
+    rzBaseH = 0;
+  let lastSize = { w: size.width, h: size.height };
+
+  const applyPanelMetrics = (w: number, h: number) => {
+    // wrap 宽度 = iframe 宽度；wrap 高度不写死（= 22px 拖动条 + iframe 高度）
+    wrap.style.width = w + "px";
+    panel.style.width = w + "px";
+    panel.style.height = h + "px";
+    lastSize = { w, h };
+    // 主动通知面板重新判定布局适配档位（不依赖 iframe 自身 resize 事件）
+    try {
+      const iw: any = panel.contentWindow;
+      if (iw && iw.AskGPTPopup && iw.AskGPTPopup.notifyPanelSize) {
+        iw.AskGPTPopup.notifyPanelSize(w, h);
+      }
+    } catch (e) {}
+  };
+
+  const HANDLES: Array<{ id: string; dir: ResizeDir }> = [
+    { id: "askgpt-panel-resize", dir: "corner" },
+    { id: "askgpt-panel-resize-r", dir: "r" },
+    { id: "askgpt-panel-resize-b", dir: "b" },
+  ];
+  for (const def of HANDLES) {
+    const handle = doc.createElement("div");
+    handle.id = def.id;
+    handle.setAttribute("data-dir", def.dir);
+    handle.title = "拖动调整面板大小";
+    handle.addEventListener("mousedown", (e: MouseEvent) => {
+      resizing = def.dir;
+      rzStartX = e.screenX;
+      rzStartY = e.screenY;
+      const rect = wrap.getBoundingClientRect();
+      const frameH = panel.getBoundingClientRect().height;
+      rzBaseW = rect.width;
+      rzBaseH =
+        frameH > 0 ? frameH : parseFloat(panel.style.height) || rect.height;
+      e.preventDefault();
+      e.stopPropagation();
+      // 拖动期间 iframe 不再吃鼠标事件，避免鼠标移到 iframe 上时丢 mousemove/mouseup
+      panel.style.pointerEvents = "none";
+      doc.documentElement.classList.add("askgpt-resizing", "ag-rz-" + def.dir);
+    });
+    wrap.appendChild(handle);
+  }
+
+  // 拖拽逻辑：拖 bar 移动 wrap；拖把手缩放 wrap + iframe；松手各自记忆
   let dragging = false;
   let startX = 0,
     startY = 0,
@@ -231,12 +291,46 @@ function ensurePanel(mainWin: Window) {
     e.preventDefault();
   });
   (mainWin as any).addEventListener("mousemove", (e: MouseEvent) => {
+    if (resizing) {
+      const next = computeResizedPanel(
+        { w: rzBaseW, h: rzBaseH },
+        { dx: e.screenX - rzStartX, dy: e.screenY - rzStartY },
+        resizing,
+        {
+          width: (mainWin as any).innerWidth || 1200,
+          height: (mainWin as any).innerHeight || 900,
+        },
+      );
+      applyPanelMetrics(next.w, next.h);
+      return;
+    }
     if (!dragging) return;
     wrap.style.left = baseLeft + (e.screenX - startX) + "px";
     wrap.style.top = baseTop + (e.screenY - startY) + "px";
     wrap.style.right = "auto";
   });
   (mainWin as any).addEventListener("mouseup", () => {
+    if (resizing) {
+      resizing = null;
+      panel.style.pointerEvents = "";
+      doc.documentElement.classList.remove(
+        "askgpt-resizing",
+        "ag-rz-corner",
+        "ag-rz-r",
+        "ag-rz-b",
+      );
+      // 松手才写 prefs（拖动过程实时生效但不落盘，避免高频写配置）
+      try {
+        Zotero.Prefs.set(SIZE_PREF, lastSize.w + "x" + lastSize.h);
+      } catch (e) {}
+      keepPanelInView(
+        mainWin,
+        wrap,
+        { width: lastSize.w, height: lastSize.h },
+        PANEL_PREF,
+      );
+      return;
+    }
     if (!dragging) return;
     dragging = false;
     try {
@@ -267,27 +361,89 @@ function ensurePanel(mainWin: Window) {
   return wrap;
 }
 
+/* ==== 面板尺寸：默认值 + 纯函数（.scaffold/tmp/test_resize.cjs 会抽取这段做单测） ==== */
+/** 面板默认尺寸：宽而短（一开就适合读文献 + 提问，不占满半个屏幕） */
+const PANEL_DEFAULT_W = 900;
+const PANEL_DEFAULT_H = 520;
+/** 面板尺寸硬边界（与面内 popup.js 的夹取一致） */
+const PANEL_MIN_W = 420;
+const PANEL_MIN_H = 360;
+const PANEL_MAX = 1600;
+const PANEL_VIEW_MARGIN_X = 40; // 宽最多 = 主窗口宽 − 40
+const PANEL_VIEW_MARGIN_Y = 80; // 高最多 = 主窗口高 − 80
+
+/** 主窗口可视区内允许的最大面板尺寸 */
+export function panelSizeLimits(view: { width: number; height: number }) {
+  return {
+    maxW: Math.max(
+      PANEL_MIN_W,
+      Math.min(PANEL_MAX, (view.width || 1200) - PANEL_VIEW_MARGIN_X),
+    ),
+    maxH: Math.max(
+      PANEL_MIN_H,
+      Math.min(PANEL_MAX, (view.height || 900) - PANEL_VIEW_MARGIN_Y),
+    ),
+  };
+}
+
 /**
- * 面板尺寸：可配置项 extensions.askgpt.panelSize，取值 "720x860"（也兼容 JSON）。
- * 默认 720×860；并夹在主窗口可视范围内，避免超出屏幕。
+ * 把一次缩放拖拽的位移换算成新的面板尺寸（纯函数，便于单测）。
+ * dir: "corner" 右下角（宽高都变）/ "r" 右边缘（只变宽）/ "b" 下边缘（只变高）。
+ */
+export function computeResizedPanel(
+  base: { w: number; h: number },
+  delta: { dx: number; dy: number },
+  dir: "corner" | "r" | "b",
+  view: { width: number; height: number },
+) {
+  const { maxW, maxH } = panelSizeLimits(view);
+  const clamp = (v: number, lo: number, hi: number) =>
+    Math.max(lo, Math.min(hi, v));
+  const w = dir === "b" ? base.w : clamp(base.w + delta.dx, PANEL_MIN_W, maxW);
+  const h = dir === "r" ? base.h : clamp(base.h + delta.dy, PANEL_MIN_H, maxH);
+  return { w: Math.round(w), h: Math.round(h) };
+}
+
+/** 解析 "900x520" / {w,h} / {width,height} 形式的面板尺寸（非法值 / 非正数返回 null） */
+export function parsePanelSize(raw: any): { w: number; h: number } | null {
+  const ok = (w: number, h: number) =>
+    isFinite(w) && isFinite(h) && w > 0 && h > 0;
+  try {
+    if (raw && typeof raw === "object") {
+      const w = parseFloat(raw.w ?? raw.width);
+      const h = parseFloat(raw.h ?? raw.height);
+      return ok(w, h) ? { w, h } : null;
+    }
+    const s = String(raw ?? "").trim();
+    if (s.startsWith("{")) {
+      const o = JSON.parse(s);
+      const w = parseFloat(o.w ?? o.width);
+      const h = parseFloat(o.h ?? o.height);
+      return ok(w, h) ? { w, h } : null;
+    }
+    const m = s.match(/(-?\d+(?:\.\d+)?)\s*[x×,;\s]\s*(-?\d+(?:\.\d+)?)/i);
+    if (m) {
+      const w = parseFloat(m[1]);
+      const h = parseFloat(m[2]);
+      return ok(w, h) ? { w, h } : null;
+    }
+  } catch (e) {}
+  return null;
+}
+/* ==== 面板尺寸：纯函数 END ==== */
+
+type ResizeDir = "corner" | "r" | "b";
+
+/**
+ * 面板尺寸：可配置项 extensions.askgpt.panelSize，取值 "900x520"（也兼容 JSON）。
+ * 默认 900×520（宽而短）；并夹在主窗口可视范围内（宽 −40 / 高 −80），避免超出屏幕。
  */
 function readPanelSize(prefName: string, mainWin: Window) {
-  let w = 720;
-  let h = 860;
+  let w = PANEL_DEFAULT_W;
+  let h = PANEL_DEFAULT_H;
   try {
-    const raw = Zotero.Prefs.get(prefName);
-    let parsed: any = null;
-    if (raw) {
-      const s = String(raw).trim();
-      if (s.startsWith("{")) {
-        const o = JSON.parse(s);
-        parsed = { w: o.w ?? o.width, h: o.h ?? o.height };
-      } else {
-        const m = s.match(/(\d+)\s*[x×,;\s]\s*(\d+)/i);
-        if (m) parsed = { w: parseFloat(m[1]), h: parseFloat(m[2]) };
-      }
-    }
-    if (parsed && parsed.w && parsed.h) {
+    const parsed = parsePanelSize(Zotero.Prefs.get(prefName));
+    if (parsed) {
       w = parsed.w;
       h = parsed.h;
     }
@@ -297,15 +453,87 @@ function readPanelSize(prefName: string, mainWin: Window) {
     Math.max(lo, Math.min(hi, v));
   try {
     const win: any = mainWin;
-    const iw = win.innerWidth || 1200;
-    const ih = win.innerHeight || 900;
-    w = clamp(w, 420, Math.max(420, Math.min(1600, iw - 40)));
-    h = clamp(h, 360, Math.max(360, Math.min(1600, ih - 60)));
+    const { maxW, maxH } = panelSizeLimits({
+      width: win.innerWidth || 1200,
+      height: win.innerHeight || 900,
+    });
+    w = clamp(w, PANEL_MIN_W, maxW);
+    h = clamp(h, PANEL_MIN_H, maxH);
   } catch (e) {
-    w = clamp(w, 420, 1600);
-    h = clamp(h, 360, 1600);
+    w = clamp(w, PANEL_MIN_W, PANEL_MAX);
+    h = clamp(h, PANEL_MIN_H, PANEL_MAX);
   }
   return { width: Math.round(w), height: Math.round(h) };
+}
+
+/**
+ * 尺寸变化后把面板推回可视区：把手在右下角，面板如果探出窗外就够不着了。
+ * 只在真的被推动时写回位置配置，避免覆盖用户自己拖出来的位置。
+ */
+function keepPanelInView(
+  mainWin: any,
+  wrap: HTMLElement,
+  size: { width: number; height: number },
+  posPref: string,
+) {
+  try {
+    const vw = mainWin.innerWidth || 0;
+    const vh = mainWin.innerHeight || 0;
+    if (!vw || !vh) return;
+    const rect = wrap.getBoundingClientRect();
+    const fullH = size.height + 22; // 22px 拖动条
+    let left = rect.left;
+    let top = rect.top;
+    let moved = false;
+    const overX = left + size.width - (vw - 8);
+    if (overX > 0 && left - overX >= 4) {
+      left = left - overX;
+      moved = true;
+    }
+    const overY = top + fullH - (vh - 8);
+    if (overY > 0 && top - overY >= 4) {
+      top = top - overY;
+      moved = true;
+    }
+    if (!moved) return;
+    wrap.style.left = Math.round(left) + "px";
+    wrap.style.top = Math.round(top) + "px";
+    wrap.style.right = "auto";
+    Zotero.Prefs.set(
+      posPref,
+      JSON.stringify({ left: Math.round(left), top: Math.round(top) }),
+    );
+  } catch (e) {}
+}
+
+/** 注入面板专用 CSS（把手外观 / 拖动中的光标与禁选中）；只注入一次 */
+function ensurePanelStyle(doc: any) {
+  try {
+    if (doc.getElementById("askgpt-panel-style")) return;
+    const style = doc.createElement("style");
+    style.id = "askgpt-panel-style";
+    style.textContent = [
+      "#askgpt-panel-resize,#askgpt-panel-resize-r,#askgpt-panel-resize-b{" +
+        "position:absolute;z-index:2147483000;background-repeat:no-repeat;}",
+      // 右下角：低调的双斜纹握把（悬停变亮）
+      "#askgpt-panel-resize{right:0;bottom:0;width:17px;height:17px;" +
+        "cursor:nwse-resize;opacity:.6;border-bottom-right-radius:12px;" +
+        "background-image:" +
+        "linear-gradient(135deg,transparent 44%,rgba(226,232,255,.6) 44%,rgba(226,232,255,.6) 53%,transparent 53%)," +
+        "linear-gradient(135deg,transparent 66%,rgba(226,232,255,.45) 66%,rgba(226,232,255,.45) 75%,transparent 75%);}",
+      "#askgpt-panel-resize:hover{opacity:1;}",
+      "#askgpt-panel-resize-r{right:0;top:22px;bottom:17px;width:5px;cursor:ew-resize;}",
+      "#askgpt-panel-resize-b{left:0;right:17px;bottom:0;height:5px;cursor:ns-resize;}",
+      "#askgpt-panel-resize-r:hover,#askgpt-panel-resize-b:hover{" +
+        "background-color:rgba(109,132,255,.3);}",
+      // 拖动中：全窗口改光标 + 禁止选中文字（含面板内文本）
+      "html.askgpt-resizing,html.askgpt-resizing *{user-select:none !important;}",
+      "html.askgpt-resizing.ag-rz-corner,html.askgpt-resizing.ag-rz-corner *{cursor:nwse-resize !important;}",
+      "html.askgpt-resizing.ag-rz-r,html.askgpt-resizing.ag-rz-r *{cursor:ew-resize !important;}",
+      "html.askgpt-resizing.ag-rz-b,html.askgpt-resizing.ag-rz-b *{cursor:ns-resize !important;}",
+    ].join("\n");
+    (doc.head || doc.documentElement).appendChild(style);
+  } catch (e) {}
 }
 
 /** 把状态同时存到 addon.data.popupState 并推给面板 iframe（幂等） */

@@ -280,6 +280,7 @@
     settings: $("settings"),
     btnSettings: $("btn-settings"),
     ctxBadge: $("ctx-badge"),
+    ctxText: $("ctx-text"),
     focusBadge: $("focus-badge"),
     focusLabel: $("focus-label"),
     focusClear: $("focus-clear"),
@@ -308,9 +309,15 @@
   const FS_MAX = 22;
   const PANEL_W_MIN = 420;
   const PANEL_W_MAX = 1600;
-  const PANEL_H_MIN = 400;
+  const PANEL_H_MIN = 360;
   const PANEL_H_MAX = 1600;
-  const DEFAULT_PANEL_SIZE = { w: 720, h: 860 };
+  /** 默认尺寸：宽而短（900×520）——一开面板就能一边读文献一边提问 */
+  const DEFAULT_PANEL_SIZE = { w: 900, h: 520 };
+  /** 尺寸自适应断点（与 popup.css 里的 media query 数值保持一致） */
+  const BP_NARROW_W = 560; // < 560：模型/状态徽章只留短文案
+  const BP_WIDE_W = 1100; // > 1100：气泡限制最大宽度并居中
+  const BP_SHORT_H = 560; // < 560：顶部栏 / 徽章 / chips 压紧
+  const BP_TINY_H = 440; // < 440：隐藏 chips 行
 
   function clampNum(v, min, max, fallback) {
     const n = parseFloat(v);
@@ -327,16 +334,28 @@
     return size;
   }
 
-  /** 解析 "720x860" / {width,height} / [w,h] 形式的面板尺寸设置 */
+  /** 解析 "900x520" / {width,height} / JSON 形式的面板尺寸设置（非法值 / 非正数返回 null） */
   function parsePanelSize(raw) {
+    const ok = (w, h) => isFinite(w) && isFinite(h) && w > 0 && h > 0;
     try {
       if (raw && typeof raw === "object") {
-        const w = raw.w || raw.width;
-        const h = raw.h || raw.height;
-        if (w && h) return { w: parseFloat(w), h: parseFloat(h) };
+        const w = parseFloat(raw.w != null ? raw.w : raw.width);
+        const h = parseFloat(raw.h != null ? raw.h : raw.height);
+        return ok(w, h) ? { w: w, h: h } : null;
       }
-      const m = String(raw || "").match(/(\d+)\s*[x×,;\s]\s*(\d+)/i);
-      if (m) return { w: parseFloat(m[1]), h: parseFloat(m[2]) };
+      const s = String(raw == null ? "" : raw).trim();
+      if (s.charAt(0) === "{") {
+        const o = JSON.parse(s);
+        const w = parseFloat(o.w != null ? o.w : o.width);
+        const h = parseFloat(o.h != null ? o.h : o.height);
+        return ok(w, h) ? { w: w, h: h } : null;
+      }
+      const m = s.match(/(-?\d+(?:\.\d+)?)\s*[x×,;\s]\s*(-?\d+(?:\.\d+)?)/i);
+      if (m) {
+        const w = parseFloat(m[1]);
+        const h = parseFloat(m[2]);
+        return ok(w, h) ? { w: w, h: h } : null;
+      }
     } catch (e) {}
     return null;
   }
@@ -350,28 +369,88 @@
     return null;
   }
 
+  /**
+   * 按当前 iframe 尺寸切布局适配类（CSS media query 之外，再给 JS 一个统一判断口）。
+   * 主窗口拖右下角把手改尺寸 → iframe 触发 resize 事件 → 这里重新判定。
+   */
+  function syncViewportClasses(size) {
+    const root = document.documentElement;
+    const w = Math.round(
+      (size && isFinite(size.w) && size.w) ||
+        window.innerWidth ||
+        DEFAULT_PANEL_SIZE.w,
+    );
+    const h = Math.round(
+      (size && isFinite(size.h) && size.h) ||
+        window.innerHeight ||
+        DEFAULT_PANEL_SIZE.h,
+    );
+    const narrow = w < BP_NARROW_W;
+    const wide = w > BP_WIDE_W;
+    const short = h < BP_SHORT_H;
+    const tiny = h < BP_TINY_H;
+    root.classList.toggle("ag-narrow", narrow);
+    root.classList.toggle("ag-wide", wide);
+    root.classList.toggle("ag-short", short);
+    root.classList.toggle("ag-tiny", tiny);
+    root.setAttribute("data-ag-size", w + "x" + h);
+    return { w: w, h: h, narrow: narrow, wide: wide, short: short, tiny: tiny };
+  }
+
+  /**
+   * 主窗口拖缩放把手时主动通知面板（不依赖 iframe 的 resize 事件：
+   * 部分环境/无头浏览器里 iframe 尺寸变了但不派发 resize）。
+   */
+  function notifyPanelSize(w, h) {
+    const info = syncViewportClasses({ w: w, h: h });
+    updateContextBadges();
+    if (settingsOpen()) {
+      const active = document.activeElement;
+      if (active !== el.setPanelW && active !== el.setPanelH) {
+        el.setPanelW.value = String(Math.round(info.w));
+        el.setPanelH.value = String(Math.round(info.h));
+      }
+    }
+    return info;
+  }
+
   function applyPanelSize(w, h) {
     const fe = getPanelFrame();
     if (!fe) return null;
     let W = clampNum(w, PANEL_W_MIN, PANEL_W_MAX, DEFAULT_PANEL_SIZE.w);
     let H = clampNum(h, PANEL_H_MIN, PANEL_H_MAX, DEFAULT_PANEL_SIZE.h);
-    // 不要让面板超出 Zotero 主窗口
+    // 不要让面板超出 Zotero 主窗口（宽 −40 / 高 −80）
     try {
       const win = fe.ownerGlobal || window.parent;
       if (win && win.innerWidth) {
         W = Math.min(W, Math.max(PANEL_W_MIN, win.innerWidth - 40));
       }
       if (win && win.innerHeight) {
-        H = Math.min(H, Math.max(360, win.innerHeight - 80));
+        H = Math.min(H, Math.max(PANEL_H_MIN, win.innerHeight - 80));
       }
     } catch (e) {}
+    W = Math.round(W);
+    H = Math.round(H);
     fe.style.width = W + "px";
     fe.style.height = H + "px";
+    syncViewportClasses({ w: W, h: H });
     return { w: W, h: H };
+  }
+
+  /** 应用 + 持久化面板尺寸（设置保存与外部调用共用同一条链路） */
+  function setPanelSize(w, h) {
+    const applied = applyPanelSize(w, h);
+    if (!applied) return null;
+    setPref("panelSize", applied.w + "x" + applied.h);
+    if (el.setPanelW) el.setPanelW.value = String(applied.w);
+    if (el.setPanelH) el.setPanelH.value = String(applied.h);
+    return applied;
   }
 
   /* ---------- 设置 ---------- */
   function loadSettings() {
+    // 每次读设置前先按当前 iframe 尺寸判定一次适配档位（决定徽章用长文案还是短文案）
+    syncViewportClasses();
     el.setBase.value = getPref("baseURL", "https://api.deepseek.com");
     el.setKey.value = getPref("apiKey", "");
     el.setModel.value = getPref("model", "deepseek-chat");
@@ -421,12 +500,7 @@
     // 外观：字号 + 面板尺寸（都立即生效）
     const fs = applyFontSize(el.setFontSize.value);
     setPref("fontSize", fs);
-    const applied = applyPanelSize(el.setPanelW.value, el.setPanelH.value);
-    if (applied) {
-      setPref("panelSize", applied.w + "x" + applied.h);
-      el.setPanelW.value = String(Math.round(applied.w));
-      el.setPanelH.value = String(Math.round(applied.h));
-    }
+    setPanelSize(el.setPanelW.value, el.setPanelH.value);
     el.saveStatus.textContent = "✓ 已保存（来源改动下次打开面板生效）";
     setTimeout(() => (el.saveStatus.textContent = ""), 1500);
     updateBadge();
@@ -516,23 +590,34 @@
 
   /** 「整篇文献 + 选中段落」的状态 → 顶部两个极简徽章（不再有大卡片） */
   function updateContextBadges() {
+    // 窄面板（< 560px）：徽章只留短文案，避免把顶部栏挤爆
+    const narrow = document.documentElement.classList.contains("ag-narrow");
+    // 徽章文字写在内部 span 里（外层是 inline-flex，直接放文本节点在窄面板里
+    // 不会正常省略号截断，会顶出横向滚动条）
+    const setBadgeText = (t) => {
+      const target = el.ctxText || el.ctxBadge;
+      target.textContent = t;
+    };
     // 1) 整篇文献徽章：正常=绿、读不到=黄、读取中=灰
     if (paperLoading && !paperText) {
-      el.ctxBadge.textContent = "⏳ 正在读取全文…";
+      setBadgeText(narrow ? "⏳ 读取全文…" : "⏳ 正在读取全文…");
       el.ctxBadge.className = "ctx-badge loading";
     } else if (paperText) {
-      el.ctxBadge.textContent =
-        "📄 整篇文献 " +
-        formatChars(paperChars) +
-        " 字" +
-        (paperLabel ? " · " + paperLabel : "") +
-        (paperTruncated ? "（已截断）" : "");
+      setBadgeText(
+        narrow
+          ? "📄 " + formatChars(paperChars) + " 字"
+          : "📄 整篇文献 " +
+              formatChars(paperChars) +
+              " 字" +
+              (paperLabel ? " · " + paperLabel : "") +
+              (paperTruncated ? "（已截断）" : ""),
+      );
       el.ctxBadge.className = "ctx-badge";
     } else if (focusSel) {
-      el.ctxBadge.textContent = "⚠ 未读到全文 · 仅发选中段落";
+      setBadgeText(narrow ? "⚠ 仅选中段落" : "⚠ 未读到全文 · 仅发选中段落");
       el.ctxBadge.className = "ctx-badge warn";
     } else {
-      el.ctxBadge.textContent = "⚠ 无文献上下文";
+      setBadgeText(narrow ? "⚠ 无上下文" : "⚠ 无文献上下文");
       el.ctxBadge.className = "ctx-badge warn";
     }
     el.ctxBadge.classList.remove("hidden");
@@ -1232,6 +1317,22 @@
         persistSession();
       });
     }
+    // iframe 尺寸变化（主窗口拖右下角把手 / 设置里改面板大小）→ 重新判定适配档位
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("resize", () => {
+        syncViewportClasses();
+        updateContextBadges();
+        // 设置开着时顺带刷新「面板大小」里显示的实时尺寸（正在输入时不动它）
+        if (settingsOpen()) {
+          const fe = measurePanelFrame();
+          const active = document.activeElement;
+          if (fe && active !== el.setPanelW && active !== el.setPanelH) {
+            el.setPanelW.value = String(Math.round(fe.w));
+            el.setPanelH.value = String(Math.round(fe.h));
+          }
+        }
+      });
+    }
     document.querySelectorAll(".chip").forEach((c) => {
       c.addEventListener("click", () => send(c.dataset.q));
     });
@@ -1259,6 +1360,24 @@
     saveNote: saveLastAnswerAsNote,
     updateLiveSelection,
     capturePanelSelection,
+    // 外观 / 尺寸（设置面板、主窗口与测试共用同一条链路）
+    parsePanelSize,
+    applyPanelSize,
+    setPanelSize,
+    notifyPanelSize,
+    getPanelSize: measurePanelFrame,
+    syncViewportClasses,
+    defaultPanelSize: DEFAULT_PANEL_SIZE,
+    sizeBreakpoints: {
+      narrowW: BP_NARROW_W,
+      wideW: BP_WIDE_W,
+      shortH: BP_SHORT_H,
+      tinyH: BP_TINY_H,
+      minW: PANEL_W_MIN,
+      minH: PANEL_H_MIN,
+      maxW: PANEL_W_MAX,
+      maxH: PANEL_H_MAX,
+    },
     // 调试用：渲染器是否就绪（markdown-it / KaTeX 是否加载成功）
     rendererReady() {
       const R = window.AskGPTRender;
