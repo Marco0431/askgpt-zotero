@@ -752,6 +752,13 @@ button.primary:disabled {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* 上下文预览里的 markdown 标题（去掉了 # 号，加粗显示） */
+#context-text .ag-md-heading,
+#context-focus .ag-md-heading {
+  font-weight: 700;
+  color: #cdd7ff;
+}
+
 /* ---------- 数学公式（KaTeX，离线打包） ---------- */
 .ag-math-inline {
   display: inline-block;

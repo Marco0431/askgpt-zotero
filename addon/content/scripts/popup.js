@@ -522,7 +522,7 @@
   }
 
   function renderMarkdownFallback(text) {
-    const src = String(text || "");
+    let src = String(text || "").replace(/\r\n?/g, "\n");
     const codeBlocks = [];
     const inlineCodes = [];
     const formulas = [];
@@ -537,7 +537,13 @@
       inlineCodes.push(`<span class="md-inline-code">${escapeHtml(c)}</span>`);
       return "@@IC" + (inlineCodes.length - 1) + "@@";
     });
-    // 3. 块级公式 $$...$$ 占位
+    // 3. 归一化标题写法（代码已占位，改不到代码内容）：模型常把 ### 写在同一行 / 缩进 4 空格
+    body = body
+      .replace(/^[ \t]{2,}(#{1,6}[ \t])/gm, "$1")
+      .replace(/([^\n#\\])([ \t]*)(#{2,6})(?=[ \t]|\d|$)/g, "$1\n$3")
+      .replace(/(^|\n)(#{1,6})(?=[^ \t\n#])/g, "$1$2 ")
+      .replace(/\u00a0/g, " ");
+    // 4. 块级公式 $$...$$ 占位
     body = body.replace(/\$\$([\s\S]+?)\$\$/g, (_m, inner) => {
       formulas.push(
         `<div class="md-formula">${applyScripts(escapeHtml(inner.trim()))}</div>`,

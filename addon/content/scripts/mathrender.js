@@ -178,11 +178,14 @@
       return "@@AGCODE" + (codes.length - 1) + "@@";
     });
 
-    // 2) 抽公式
+    // 2) 修正"看起来没渲染"的标题写法（模型常见的几种畸形写法）
+    src = normalizeHeadings(src);
+
+    // 3) 抽公式
     var ex = extractMath(src);
     var body = ex.text;
 
-    // 3) markdown-it 渲染（不可用时退回极简渲染）
+    // 4) markdown-it 渲染（不可用时退回极简渲染）
     var md = getMd();
     var html;
     if (md) {
@@ -191,15 +194,15 @@
       html = fallbackMarkdown(body);
     }
 
-    // 4) 还原代码
+    // 5) 还原代码
     html = html.replace(/@@AGCODE(\d+)@@/g, function (m, i) {
       return codes[+i] != null ? codes[+i] : m;
     });
 
-    // 5) 还原公式
+    // 6) 还原公式
     html = fillMath(html, ex.math);
 
-    // 6) 单独成段的块级公式去掉 <p> 包裹，避免多余空行
+    // 7) 单独成段的块级公式去掉 <p> 包裹，避免多余空行
     html = html.replace(
       /<p>\s*(<span class="ag-math-block">[\s\S]*?<\/span>)\s*<\/p>/g,
       "$1",
@@ -209,12 +212,44 @@
   }
 
   /**
-   * 纯文本预览（选中段落 / 全文）：只渲染公式，其余原样转义。
+   * 标题写法归一化（在 markdown 解析前、代码块已占位后调用）：
+   *   - 全角 ＃＃＃ → ###
+   *   - 标题标记和正文挤在同一行（…：### 3. 特征）→ 拆行
+   *   - 行首被缩进 2+ 空格的标题（会被 Markdown 当成代码块）→ 去掉缩进
+   *   - `###3. 特征` / `###\u00a0特征`（缺空格）→ 补一个空格
+   * 只在「2 个以上 # 且后面是空格/数字/中文数字」时才处理，避免误伤代码里的 #。
+   */
+  function normalizeHeadings(src) {
+    var t = String(src || "").replace(/\r\n?/g, "\n");
+    var HASH_TAIL = "(?=[ \\t]|$|\\d|[一二三四五六七八九十]|\\()";
+    // 全角井号
+    t = t.replace(/^[＃]{2,6}/gm, function (m) {
+      return new Array(m.length + 1).join("#");
+    });
+    // 和正文挤在同一行
+    t = t.replace(
+      new RegExp("([^\\n#\\\\])([ \\t]*)(#{2,6})" + HASH_TAIL, "g"),
+      "$1\n$3",
+    );
+    // 行首缩进（会被当成代码块）
+    t = t.replace(new RegExp("^[ \\t]{2,}(#{1,6})" + HASH_TAIL, "gm"), "$1");
+    // 缺空格 / nbsp
+    t = t.replace(new RegExp("(^|\\n)(#{1,6})(?=[^ \\t\\n#])", "g"), "$1$2 ");
+    t = t.replace(/\u00a0/g, " ");
+    return t;
+  }
+
+  /**
+   * 纯文本预览（选中段落 / 全文）：公式真渲染，markdown 标题标记去掉并加粗，
+   * 其余原样转义（预览是"看原文"，不做完整 Markdown 解析）。
    */
   function renderPlainWithMath(text) {
-    var src = String(text || "");
+    var src = normalizeHeadings(String(text || ""));
     var ex = extractMath(src);
     var html = escapeHtml(ex.text);
+    html = html.replace(/^[ \t]*(#{1,6})[ \t]*(.+)$/gm, function (_m, _h, t) {
+      return '<span class="ag-md-heading">' + t + "</span>";
+    });
     html = fillMath(html, ex.math);
     return html.replace(/\n/g, "<br/>");
   }
