@@ -217,7 +217,7 @@
         );
       } else if (m.role === "assistant" && m.content) {
         const ui = appendMessage("assistant", m.content, false);
-        if (ui && ui.bubble) ui.bubble.innerHTML = renderMarkdown(m.content);
+        if (ui && ui.bubble) setHtmlSafe(ui.bubble, renderMarkdown(m.content));
       }
     }
     el.messages.scrollTop = el.messages.scrollHeight;
@@ -311,6 +311,8 @@
     setTemp: $("set-temp"),
     setSys: $("set-sys"),
     setCtxSrc: $("set-ctx-src"),
+    setLastErr: $("set-lasterr"),
+    btnClearErr: $("btn-clear-err"),
     setWeb: $("set-web"),
     setFontSize: $("set-fontsize"),
     setPanelW: $("set-panel-w"),
@@ -499,6 +501,9 @@
     const shown = frameSize || size;
     el.setPanelW.value = String(Math.round(shown.w));
     el.setPanelH.value = String(Math.round(shown.h));
+    if (el.setLastErr) {
+      el.setLastErr.value = String(getPref("lastError", "") || "（无）");
+    }
     updateBadge();
   }
 
@@ -814,7 +819,7 @@
     const bubble = document.createElement("div");
     bubble.className = "bubble";
     if (role === "assistant") {
-      bubble.innerHTML = renderMarkdown(text) || "…";
+      setHtmlSafe(bubble, renderMarkdown(text) || "…");
       enhanceScripts(bubble);
     } else {
       bubble.textContent = text;
@@ -858,6 +863,72 @@
       /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ufeff]/g,
       "",
     );
+  }
+
+  /* ---------- 错误上报：任何异常都写进 prefs，方便远程定位 ---------- */
+  function reportPanelError(stage, err) {
+    try {
+      const e = err || {};
+      const msg = String(
+        (e && (e.name ? e.name + ": " + e.message : e.message || e)) || e,
+      );
+      const stack = String((e && e.stack) || "")
+        .split("\n")
+        .slice(0, 6)
+        .join(" | ");
+      const info = `[${stage}] ${msg}${stack ? " @ " + stack : ""}`.slice(
+        0,
+        1500,
+      );
+      const stamped = new Date().toISOString() + " " + info;
+      setPref("lastError", stamped);
+      try {
+        if (el && el.setLastErr) el.setLastErr.value = stamped;
+      } catch (e0) {}
+      if (Zotero && Zotero.logError) {
+        Zotero.logError(new Error("[AskGPT] " + info));
+      }
+      setStatus("出错了（已记录）：" + msg);
+    } catch (e2) {}
+  }
+
+  /**
+   * 安全的 HTML 插入。
+   * 面板是 XHTML（XML）文档，直接 `innerHTML = 片段` 在某些情况下会被 Gecko 拒绝，
+   * 抛 NS_ERROR_DOM_SYNTAX_ERR —— 就是 "An invalid or illegal string was specified"。
+   * 这里失败时改用 HTML 解析器解析 + importNode 搬进来，既不受 XML 良构限制，
+   * 也不会让 AI 回答中途断掉；两条路都失败才退化成纯文本。
+   */
+  function setHtmlSafe(target, html) {
+    const src = String(html == null ? "" : html);
+    if (!target) return false;
+    try {
+      target.innerHTML = src;
+      return true;
+    } catch (e) {
+      try {
+        const doc = new DOMParser().parseFromString(
+          "<body><div id='ag-safe-root'>" + src + "</div></body>",
+          "text/html",
+        );
+        const root = doc.getElementById("ag-safe-root");
+        if (!root) throw e;
+        while (target.firstChild) target.removeChild(target.firstChild);
+        const frag = document.createDocumentFragment();
+        for (const node of Array.from(root.childNodes)) {
+          frag.appendChild(document.importNode(node, true));
+        }
+        target.appendChild(frag);
+        reportPanelError("html-insert:fallback", e);
+        return true;
+      } catch (e2) {
+        reportPanelError("html-insert", e2);
+        try {
+          target.textContent = src.replace(/<[^>]*>/g, " ");
+        } catch (e3) {}
+        return false;
+      }
+    }
   }
 
   /* ---------- 流式请求（OpenAI 兼容） ---------- */
@@ -1051,9 +1122,16 @@
       // KaTeX + Markdown 全量重渲染较贵，流式期间按 ~140ms 节流
       if (now - lastStreamRender < 140) return;
       lastStreamRender = now;
-      ui.bubble.innerHTML =
-        renderMarkdown(acc) + '<span class="cursor"></span>';
-      el.messages.scrollTop = el.messages.scrollHeight;
+      try {
+        setHtmlSafe(
+          ui.bubble,
+          renderMarkdown(acc) + '<span class="cursor"></span>',
+        );
+        el.messages.scrollTop = el.messages.scrollHeight;
+      } catch (e) {
+        // 渲染失败绝不打断回答
+        reportPanelError("stream-render", e);
+      }
     };
     const ensureBubble = () => {
       if (!ui) ui = appendMessage("assistant", "", true);
@@ -1066,8 +1144,12 @@
         rafId = null;
       }
       if (ui) {
-        ui.bubble.innerHTML = renderMarkdown(acc);
-        enhanceScripts(ui.bubble);
+        try {
+          setHtmlSafe(ui.bubble, renderMarkdown(acc));
+          enhanceScripts(ui.bubble);
+        } catch (e) {
+          reportPanelError("final-render", e);
+        }
         ui.wrap.classList.remove("streaming");
       }
     };
@@ -1382,6 +1464,12 @@
         persistSession();
       });
     }
+    if (el.btnClearErr) {
+      el.btnClearErr.addEventListener("click", () => {
+        setPref("lastError", "");
+        if (el.setLastErr) el.setLastErr.value = "（无）";
+      });
+    }
     // iframe 尺寸变化（主窗口拖右下角把手 / 设置里改面板大小）→ 重新判定适配档位
     if (typeof window.addEventListener === "function") {
       window.addEventListener("resize", () => {
@@ -1452,6 +1540,19 @@
 
   // 启动
   document.addEventListener("DOMContentLoaded", () => {
+    // 任何未捕获异常 / Promise 拒绝都记录（含阶段与堆栈），方便远程定位
+    window.addEventListener("error", (ev) => {
+      reportPanelError(
+        "window.onerror",
+        (ev && (ev.error || ev.message)) || "unknown",
+      );
+    });
+    window.addEventListener("unhandledrejection", (ev) => {
+      reportPanelError(
+        "unhandledrejection",
+        (ev && ev.reason) || "unknown rejection",
+      );
+    });
     loadSettings();
     bindEvents();
     refresh();

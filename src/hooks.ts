@@ -10,6 +10,7 @@ import {
   registerNotifier,
 } from "./modules/reader";
 import { openAskPopup, hideAskPopup } from "./modules/popup";
+import { runGeckoDiagnostics } from "./modules/diag";
 
 async function onStartup() {
   await Promise.all([
@@ -36,6 +37,8 @@ async function onStartup() {
   );
 
   addon.data.initialized = true;
+  // 一次性 Gecko 行为自检（结果写进 prefs，用于远程定位渲染类报错）
+  runGeckoDiagnostics();
   ztoolkit.log("AskGPT started");
 }
 
