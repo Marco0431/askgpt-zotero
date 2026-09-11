@@ -78,8 +78,16 @@
     const results = [];
     try {
       // 使用 DuckDuckGo HTML 接口，无需 Key，轻量
-      const url =
-        "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(query);
+      // encodeURIComponent 对含落单代理项的字符串会抛 URIError，这里先清一遍再编码
+      const q = stripControl(String(query == null ? "" : query)).slice(0, 300);
+      let url;
+      try {
+        url = "https://html.duckduckgo.com/html/?q=" + encodeURIComponent(q);
+      } catch (e) {
+        url =
+          "https://html.duckduckgo.com/html/?q=" +
+          encodeURIComponent(q.replace(/[\uD800-\uDFFF]/g, ""));
+      }
       const resp = await fetch(url, {
         headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
       });
@@ -90,9 +98,15 @@
       let m;
       while ((m = re.exec(html)) !== null && results.length < 5) {
         let link = m[1];
-        // 解码 DuckDuckGo 跳转链接
+        // 解码 DuckDuckGo 跳转链接（百分号序列可能不合法，解不开就用原链接）
         const uddg = link.match(/uddg=([^&]+)/);
-        if (uddg) link = decodeURIComponent(uddg[1]);
+        if (uddg) {
+          try {
+            link = decodeURIComponent(uddg[1]);
+          } catch (e) {
+            link = uddg[1];
+          }
+        }
         const title = m[2].replace(/<[^>]+>/g, "").trim();
         const snippet = m[3].replace(/<[^>]+>/g, "").trim();
         if (title) results.push({ title, url: link, snippet });
@@ -451,9 +465,21 @@
   function loadSettings() {
     // 每次读设置前先按当前 iframe 尺寸判定一次适配档位（决定徽章用长文案还是短文案）
     syncViewportClasses();
-    el.setBase.value = getPref("baseURL", "https://api.deepseek.com");
-    el.setKey.value = getPref("apiKey", "");
-    el.setModel.value = getPref("model", "deepseek-chat");
+    // 读设置时顺手清洗：老版本粘贴进来带换行/零宽字符的值会自动修好并写回
+    const rawBase = String(
+      getPref("baseURL", "https://api.deepseek.com") || "",
+    );
+    const rawKey = String(getPref("apiKey", "") || "");
+    const rawModel = String(getPref("model", "deepseek-chat") || "");
+    const cleanBase = stripInvisible(rawBase);
+    const cleanKey = stripInvisible(rawKey);
+    const cleanModel = stripInvisible(rawModel);
+    if (cleanBase !== rawBase) setPref("baseURL", cleanBase);
+    if (cleanKey !== rawKey) setPref("apiKey", cleanKey);
+    if (cleanModel !== rawModel) setPref("model", cleanModel);
+    el.setBase.value = cleanBase;
+    el.setKey.value = cleanKey;
+    el.setModel.value = cleanModel;
     el.setTemp.value = getPref("temperature", 0.3);
     let sys = String(getPref("systemPrompt", DEFAULT_SYSTEM_PROMPT) || "");
     // 老版本的默认提示词没有「整篇文献 + LaTeX 输出」要求，自动升级；
@@ -490,9 +516,9 @@
   }
 
   function saveSettings() {
-    setPref("baseURL", el.setBase.value.trim());
-    setPref("apiKey", el.setKey.value.trim());
-    setPref("model", el.setModel.value.trim());
+    setPref("baseURL", stripInvisible(el.setBase.value));
+    setPref("apiKey", stripInvisible(el.setKey.value));
+    setPref("model", stripInvisible(el.setModel.value));
     setPref("temperature", parseFloat(el.setTemp.value) || 0.3);
     setPref("systemPrompt", el.setSys.value);
     setPref("contextSource", el.setCtxSrc.value || "auto");
@@ -501,12 +527,16 @@
     const fs = applyFontSize(el.setFontSize.value);
     setPref("fontSize", fs);
     setPanelSize(el.setPanelW.value, el.setPanelH.value);
+    // 回填清洗后的值，让用户看到实际会用的内容
+    el.setBase.value = stripInvisible(el.setBase.value);
+    el.setKey.value = stripInvisible(el.setKey.value);
+    el.setModel.value = stripInvisible(el.setModel.value);
     el.saveStatus.textContent = "✓ 已保存（来源改动下次打开面板生效）";
     setTimeout(() => (el.saveStatus.textContent = ""), 1500);
     updateBadge();
   }
   function updateBadge() {
-    el.modelBadge.textContent = el.setModel.value.trim() || "…";
+    el.modelBadge.textContent = stripInvisible(el.setModel.value) || "…";
   }
 
   /* ---------- 上下文来源（整篇文献 + 选中段落） ---------- */
@@ -811,11 +841,32 @@
     }
   }
 
+  /* ---------- 设置值清洗（防止非法字符触发 Gecko NS_ERROR_DOM_SYNTAX_ERR） ---------- */
+  // 粘贴 API Key / 接口地址时最容易带进来看不见的字符：换行、制表符、零宽字符、BOM……
+  // 这些字符进到请求头 / URL 里，Gecko 会直接抛 "An invalid or illegal string was specified"。
+  const INVISIBLE_CHARS =
+    /[\u0000-\u0020\u007f-\u009f\u00a0\u200b-\u200f\u2028\u2029\u2060\ufeff]/g;
+
+  /** 去掉所有空白与不可见字符（API Key / 模型名这类不该有空格的值） */
+  function stripInvisible(s) {
+    return String(s == null ? "" : s).replace(INVISIBLE_CHARS, "");
+  }
+
+  /** 去掉控制字符但保留换行/制表（正文文本用） */
+  function stripControl(s) {
+    return String(s == null ? "" : s).replace(
+      /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ufeff]/g,
+      "",
+    );
+  }
+
   /* ---------- 流式请求（OpenAI 兼容） ---------- */
   function buildEndpoint() {
-    let base = (el.setBase.value || "https://api.deepseek.com")
-      .trim()
-      .replace(/\/+$/, "");
+    let base = stripInvisible(
+      el.setBase.value || "https://api.deepseek.com",
+    ).replace(/\/+$/, "");
+    // 没写协议就按 https 补，避免解析成奇怪的东西
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(base)) base = "https://" + base;
     // 若 base 已经以 /chat/completions 结尾则直接用
     if (base.endsWith("/chat/completions")) return base;
     // OpenAI 兼容接口统一补 /v1：硅基流动等厂商必须 /v1/chat/completions，
@@ -827,16 +878,30 @@
   // 解析 SSE 流
   async function streamChat(payload, onDelta, signal) {
     const endpoint = buildEndpoint();
+    const key = stripInvisible(el.setKey.value);
     const headers = {
       "Content-Type": "application/json",
-      Authorization: "Bearer " + el.setKey.value.trim(),
+      Authorization: "Bearer " + key,
     };
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      signal,
-    });
+    let resp;
+    try {
+      resp = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal,
+      });
+    } catch (e) {
+      // Gecko 在 URL / 请求头含非法字符串时抛的就是这个（DOMException 12）
+      const em = String((e && e.name + ": " + e.message) || e);
+      if (/invalid or illegal string|NS_ERROR_DOM_SYNTAX_ERR/i.test(em)) {
+        throw new Error(
+          `接口地址或 API Key 含非法字符（多半是粘贴时带进了换行/零宽字符）。` +
+            `已按清洗后的值重试过一次仍失败，请到设置里重新粘贴。当前地址：${endpoint}`,
+        );
+      }
+      throw e;
+    }
     if (!resp.ok) {
       let detail = "";
       try {
@@ -935,7 +1000,7 @@
     if (busy) return;
     const q = (questionText != null ? questionText : el.input.value).trim();
     if (!q) return;
-    if (!el.setKey.value.trim()) {
+    if (!stripInvisible(el.setKey.value)) {
       setStatus("请先在 ⚙ 设置里填写 API Key（设置按钮在输入框旁边）");
       return;
     }
@@ -1009,7 +1074,7 @@
 
     try {
       // 请求消息 = 固定前缀（system+全文） + 会话追加的问题
-      const model = el.setModel.value.trim() || "deepseek-chat";
+      const model = stripInvisible(el.setModel.value) || "deepseek-chat";
       const temperature = parseFloat(el.setTemp.value) || 0.3;
       const useTools = el.setWeb.checked !== false;
 
@@ -1144,7 +1209,7 @@
       return;
     }
     const bubble = lastAssistant.querySelector(".bubble");
-    const answer = (bubble ? bubble.textContent : "").trim();
+    const answer = stripControl(bubble ? bubble.textContent : "").trim();
     if (!answer) {
       setStatus("还没有可保存的回答");
       return;
@@ -1153,7 +1218,7 @@
     const userMsgs = el.messages.querySelectorAll(".msg.user");
     let question = "";
     if (userMsgs.length) {
-      question = (userMsgs[userMsgs.length - 1].textContent || "").trim();
+      question = stripControl(userMsgs[userMsgs.length - 1].textContent).trim();
     }
     const qChars = Array.from(question);
     const qShort =

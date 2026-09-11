@@ -28,6 +28,8 @@ export default zotero({
         "no-unused-vars": "off",
         "no-empty": "off",
         "no-regex-spaces": "off",
+        // 有意为之：清洗用户粘贴进来的控制字符（换行/零宽/BOM）
+        "no-control-regex": "off",
       },
     },
     {
