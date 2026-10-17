@@ -1,22 +1,38 @@
-# ✎ AskGPT · Zotero AI 文献阅读助手
+# AskGPT — Zotero AI 文献阅读助手 / AI Paper Reader
 
-> 🎯 在 Zotero 里选中文献文字，一键唤起 AI 问答 —— 像 Cursor 一样跟你的论文对话
+> 在 Zotero 里选中论文段落，按 `Ctrl+K` 提问：结合文献全文解释概念、翻译段落，并把回答保存为 Zotero 笔记。
+
+AskGPT is a Zotero plugin for asking questions about research papers without leaving the reader. It combines selected text with available attachment context, streams answers with Markdown and math rendering, and connects to a user-configured OpenAI-compatible API, including DeepSeek.
+
+[下载插件 / Download](https://github.com/Marco0431/askgpt-zotero/releases/latest/download/askgpt.xpi) · [English guide](README.en.md) · [问题反馈 / Issues](https://github.com/Marco0431/askgpt-zotero/issues) · [文档索引 / llms.txt](llms.txt)
 
 [![Zotero](https://img.shields.io/badge/Zotero-7%2F8%2F9-blue?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
 
+## 快速开始
+
+1. 下载上方的 `askgpt.xpi`，在 Zotero 的 **工具 → 插件** 中选择 **Install Plugin From File…**，安装后重启。
+2. 打开 **设置 → AskGPT**，填写自己的 API 地址、API Key 和模型。默认接口为 DeepSeek；模型服务的费用由所配置的提供商决定。
+3. 打开论文 PDF，选中一段文字，按 `Ctrl+K`（macOS 可用 `Cmd+K`），输入问题；需要保留回答时点击 **存为笔记**。
+
+可直接尝试的提问：
+
+> 请结合全文解释这段话中的方法，指出它依赖的假设；原文没有说明的内容请明确标注。
+
+适合论文阅读、段落翻译、方法解释和文献笔记。对话会将可读取的文献上下文发送到你配置的模型接口；开启联网搜索时，搜索词会发送给 DuckDuckGo。Markdown 和公式的本地排版不等于模型问答可以离线运行。
+
 ---
 
 ## ✨ 为什么用 AskGPT？
 
-| 😩 痛点                                   | ✅ 解决方案                                                     |
-| ----------------------------------------- | --------------------------------------------------------------- |
-| 读论文遇到不懂的段落，要复制粘贴到网页 AI | 选中文字 → `Ctrl+K` → 直接在 Zotero 里问                        |
-| 提问要反复附上文献全文，token 烧得快      | 🔥 **上下文缓存**：全文只发一次，同一篇文献反复提问只付增量费用 |
-| 换一段文字要关窗重开                      | 📡 **实时跟踪选中**：重新选中，面板内容自动切换                 |
-| AI 回答里的公式和表格看不清               | 🧮 **真渲染**：Markdown + KaTeX 离线排版，公式不再是源码        |
-| 弹窗被 Zotero 主窗口盖住、大小不合心意    | 📌 **内嵌浮动面板**：永远最前，可拖动、可拖拽缩放、记位置       |
+| 😩 痛点                                   | ✅ 解决方案                                                              |
+| ----------------------------------------- | ------------------------------------------------------------------------ |
+| 读论文遇到不懂的段落，要复制粘贴到网页 AI | 选中文字 → `Ctrl+K` → 直接在 Zotero 里问                                 |
+| 提问要反复附上文献全文，token 烧得快      | **固定上下文前缀**：为提供商的缓存复用创造条件，是否命中与费用取决于接口 |
+| 换一段文字要关窗重开                      | 📡 **实时跟踪选中**：重新选中，面板内容自动切换                          |
+| AI 回答里的公式和表格看不清               | 🧮 **真渲染**：Markdown + KaTeX 离线排版，公式不再是源码                 |
+| 弹窗被 Zotero 主窗口盖住、大小不合心意    | 📌 **内嵌浮动面板**：永远最前，可拖动、可拖拽缩放、记位置                |
 
 ---
 
@@ -51,7 +67,7 @@
 
 ### 🔥 省钱的缓存机制
 
-- **API 前缀缓存**：`[system + 全文]` 作为固定前缀，同一篇文献反复提问时前缀不变，DeepSeek 等 API 的磁盘上下文缓存持续命中（命中部分 0.1 倍价）
+- **API 前缀缓存**：`[system + 全文]` 作为固定前缀，同一篇文献反复提问时尽量保持前缀不变；每次请求仍会携带上下文，缓存是否命中及计费由接口提供商决定
 - **本地全文缓存**：同一会话内不重复读文件
 - **按文章分会话**：每篇文献独立记忆对话历史，切文献互不干扰
 
@@ -143,8 +159,8 @@ addon/
 
 - 🎯 官方 `Zotero.Reader.registerEventListener` 捕获 PDF 选中（`renderTextSelectionPopup`），实时推送面板
 - 📦 基于 [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template)（windingwind 官方模板）+ [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit)
-- 🔌 兼容任意 OpenAI 风格 API（DeepSeek / One API / vLLM / Ollama 网关等）
-- 📝 无本地模型、无订阅、无授权校验 —— 纯 API，你的数据只发给你自己配置的接口
+- 🔌 使用 OpenAI 风格的 Chat Completions 接口；流式输出、工具调用等能力取决于所选接口与模型
+- 📝 插件不内置模型服务；文献上下文发往你配置的接口，启用联网搜索后搜索词还会发往 DuckDuckGo
 
 ---
 

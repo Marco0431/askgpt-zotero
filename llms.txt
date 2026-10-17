@@ -1,0 +1,23 @@
+# AskGPT for Zotero
+
+> A Zotero plugin for research-paper questions, passage translation, and note-taking with selected text and available attachment context. 中文：Zotero AI 文献阅读助手。
+
+AskGPT uses a user-configured OpenAI-compatible Chat Completions endpoint, including DeepSeek. It provides streaming answers, per-paper conversations, Markdown and KaTeX rendering, and optional web search. Model credentials and service access are supplied by the user. Available document context is sent to that endpoint; optional web-search queries go to DuckDuckGo. Cache behavior and fees depend on the provider. This file is a public documentation map, not an indexing or ranking guarantee.
+
+## Documentation
+
+- [Chinese README](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/README.md): Installation, settings, usage, features, and acknowledgements.
+- [English guide](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/README.en.md): Quick start, requirements, data flow, and development.
+- [Releases](https://github.com/Marco0431/askgpt-zotero/releases): Published XPI plugin assets and release history.
+- [Issue tracker](https://github.com/Marco0431/askgpt-zotero/issues): Bug reports and feature discussions.
+
+## Source reference
+
+- [Attachment context reader](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/src/modules/fulltext.ts): Supported attachment formats, context limits, and fallback behavior.
+- [Reader integration](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/src/modules/reader.ts): Text selection, reader button, and keyboard shortcuts.
+- [Panel requests](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/addon/content/scripts/popup.js): Chat Completions, streaming, and optional web search.
+
+## Optional
+
+- [Package metadata](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/package.json): Build commands and dependencies.
+- [License](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/LICENSE): AGPL-3.0 license text.
