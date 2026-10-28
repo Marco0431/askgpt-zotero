@@ -35,7 +35,7 @@ const mockServices = {
   },
 };
 
-const sources = {};
+const factories = [];
 for (const name of ["fulltext", "popup"]) {
   const result = await build({
     absWorkingDir: root,
@@ -47,13 +47,24 @@ for (const name of ["fulltext", "popup"]) {
     target: "firefox115",
     plugins: name === "popup" ? [mockServices] : [],
   });
-  sources[name] = result.outputFiles[0].text;
+  const factoryName = name === "fulltext" ? "createFulltext" : "createPopup";
+  // Static functions are bundled with the tests. Gecko rejects data: script
+  // URIs, so no dynamic evaluation or privileged loader is needed here.
+  factories.push(`export function ${factoryName}(environment: any) {
+    const { Zotero, IOUtils, addon, Date, setTimeout, clearTimeout } = environment;
+    const __askgptTestEnvironment = environment;
+    const module = { exports: {} };
+    const exports = module.exports;
+    ${result.outputFiles[0].text}
+    return module.exports;
+  }`);
 }
 await mkdir(output, { recursive: true });
 await writeFile(
   path.join(output, "host-modules.ts"),
   "// Generated for isolated tests; never copied into the plugin.\n" +
-    `export const sources = ${JSON.stringify(sources)};\n`,
+    factories.join("\n\n") +
+    "\n",
 );
 console.log(
   "Prepared isolated Gecko host fixtures in .scaffold/test-fixtures.",
