@@ -28,6 +28,8 @@ jobs:
         uses: zotero-plugin-dev/workflows/setup-js@main
       - name: Run Build
         run: npm run build
+      - name: Verify runtime-only XPI contents
+        run: npm run check:package
       - name: Upload build result
         uses: actions/upload-artifact@v4
         with:
@@ -36,9 +38,11 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs:
       - build
     steps:
       - name: Setup JS
         uses: zotero-plugin-dev/workflows/setup-js@main
-      - run: npm run test
+      - name: Run Gecko integration and isolated host tests
+        run: npm test

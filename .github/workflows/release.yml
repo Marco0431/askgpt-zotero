@@ -16,6 +16,6 @@ jobs:
     # You can customize any of the inputs here.
     # If you omit an input, its default value will be used.
     with:
-      build: "npm run build"
+      build: "npm run build && npm run check:package"
       release: "npm run release"
     secrets: inherit

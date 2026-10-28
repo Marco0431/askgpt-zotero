@@ -3,12 +3,8 @@
  *
  * 目标：把「整篇文献」变成可发送给模型的纯文本，公式尽量保留为 LaTeX。
  *
- * 候选来源（按优先级）：
- *   0. 阅读器里打开的附件所属**条目**的全部附件（Markdown > HTML > PDF > TXT）
- *      —— 同一篇文献常有 PDF + HTML 译文 + Markdown 源三个附件，
- *         Markdown 源的公式是最完整的 LaTeX，优先用它；
- *   1. 资料窗格选中条目的附件（同上顺序）；
- *   2. 阅读器里打开的附件本身（若上面都没命中）。
+ * 先固定来源阅读器/资料窗格中的一篇文献，再按来源偏好选附件。
+ * 当前文献读取失败时不使用其他文献；缓存校验文件版本并合并并发读取。
  *
  * 关键点：
  *   - PDF：优先读 Zotero 已索引的全文缓存（.zotero-ft-cache，秒回），
@@ -39,12 +35,38 @@ const MAX_CHARS = 120000;
 /** 缓存有效期：翻译附件更新后不该一直用旧的（毫秒） */
 const CACHE_TTL = 10 * 60 * 1000;
 
-type CacheEntry = FullTextContext & { ts: number };
-/** 会话内缓存：同一文件不重复读盘/解析（路径 → 结果） */
-const fulltextCache: { [path: string]: CacheEntry } = {};
+const NEGATIVE_CACHE_TTL = 30 * 1000;
+const MAX_CACHE_ENTRIES = 24;
+type CacheEntry = {
+  context: FullTextContext | null;
+  fingerprint: string;
+  ts: number;
+  ttl: number;
+};
+const fulltextCache = new Map<string, CacheEntry>();
+const pendingReads = new Map<string, Promise<FullTextContext | null>>();
+let cacheGeneration = 0;
 
 export function clearFullTextCache() {
-  for (const k of Object.keys(fulltextCache)) delete fulltextCache[k];
+  cacheGeneration++;
+  fulltextCache.clear();
+  pendingReads.clear();
+}
+
+export type ContextOptions = { reader?: any; window?: Window };
+
+function isAttachment(item: any): boolean {
+  try {
+    return (
+      !!item &&
+      !item.deleted &&
+      (typeof item.isAttachment === "function"
+        ? item.isAttachment()
+        : item.isAttachment === true)
+    );
+  } catch {
+    return false;
+  }
 }
 
 type Cand = {
@@ -68,26 +90,30 @@ const EXT_SCORE: { [ext: string]: number } = {
 };
 
 const EXT_LABEL: { [ext: string]: string } = {
-  md: "Markdown 源（公式为完整 LaTeX）",
-  markdown: "Markdown 源（公式为完整 LaTeX）",
-  html: "HTML 译文",
-  htm: "HTML 译文",
-  pdf: "PDF 全文",
-  txt: "TXT 附件",
-  text: "TXT 附件",
+  md: "Markdown · LaTeX",
+  markdown: "Markdown · LaTeX",
+  html: "HTML",
+  htm: "HTML",
+  pdf: "PDF",
+  txt: "TXT",
+  text: "TXT",
 };
 
 /** 当前阅读器里打开的附件 item（没有则 null） */
-function getReaderAttachment(): any {
+function getReaderAttachment(options: ContextOptions): any {
   try {
-    const mainWin: any = Zotero.getMainWindow();
+    const mainWin: any = options.window || Zotero.getMainWindow();
     const tabID = mainWin?.Zotero_Tabs?.selectedID;
-    if (tabID == null) return null;
-    const reader: any = Zotero.Reader.getByTabID(tabID);
+    const reader: any =
+      options.reader !== undefined
+        ? options.reader
+        : tabID != null
+          ? Zotero.Reader.getByTabID(tabID)
+          : null;
     const id = reader && reader.itemID;
     if (!id) return null;
     const it: any = Zotero.Items.get(id);
-    return it && it.isAttachment ? it : null;
+    return isAttachment(it) ? it : null;
   } catch (e) {
     return null;
   }
@@ -108,9 +134,9 @@ export function getSourceMode(): SourceMode {
 
 /** 兄弟附件之间的打分（越小越优先）：默认 PDF 优先，可按偏好改成译文优先 */
 const SIBLING_SCORE: { [mode in SourceMode]: { [ext: string]: number } } = {
-  auto: { pdf: 1, md: 2, html: 3, htm: 3, txt: 4, text: 4 },
-  pdf: { pdf: 0, md: 1, html: 2, htm: 2, txt: 3, text: 3 },
-  translation: { md: 0, html: 1, htm: 1, txt: 2, text: 2, pdf: 5 },
+  auto: { pdf: 1, md: 2, markdown: 2, html: 3, htm: 3, txt: 4, text: 4 },
+  pdf: { pdf: 0, md: 1, markdown: 1, html: 2, htm: 2, txt: 3, text: 3 },
+  translation: { md: 0, markdown: 0, html: 1, htm: 1, txt: 2, text: 2, pdf: 5 },
 };
 
 /** 条目标题（附件取其父条目标题） */
@@ -128,7 +154,7 @@ export function getContextTitle(item: any): string {
 /** 把附件转成候选（不可读的直接丢掉） */
 function toCandidate(item: any, rank: number): Cand | null {
   try {
-    if (!item || !item.isAttachment) return null;
+    if (!isAttachment(item)) return null;
     const p: string | null = item.getFilePath();
     if (!p) return null;
     const ext = (p.split(".").pop() || "").toLowerCase();
@@ -139,7 +165,7 @@ function toCandidate(item: any, rank: number): Cand | null {
       path: p,
       ext,
       rank,
-      label: EXT_LABEL[ext] || ext.toUpperCase() + " 附件",
+      label: EXT_LABEL[ext] || ext.toUpperCase(),
     };
   } catch (e) {
     return null;
@@ -147,83 +173,49 @@ function toCandidate(item: any, rank: number): Cand | null {
 }
 
 /** 收集候选：同一篇文献（同一父条目）的附件优先 */
-function collectCandidates(): Cand[] {
-  const readerItem = getReaderAttachment();
-  const groups: { items: any[]; base: number }[] = [];
-
-  // A. 阅读器里那篇文献：父条目的全部附件（PDF + HTML 译文 + Markdown 源）
-  if (readerItem) {
-    const parent = readerItem.parentItem || null;
-    const groupItems: any[] = [];
+function collectCandidates(options: ContextOptions = {}): Cand[] {
+  const readerItem = getReaderAttachment(options);
+  let selected: any = readerItem;
+  // An explicitly supplied reader must never fall back to another window's item.
+  if (!selected && options.reader) return [];
+  if (!selected) {
     try {
-      if (parent && typeof parent.getAttachments === "function") {
-        for (const id of parent.getAttachments() || []) {
-          const child: any = Zotero.Items.get(id);
-          if (child && child.isAttachment) groupItems.push(child);
-        }
-      }
-    } catch (e) {}
-    if (!groupItems.length) groupItems.push(readerItem);
-    groups.push({ items: groupItems, base: 0 });
+      const pane = options.window
+        ? (options.window as any).ZoteroPane
+        : Zotero.getActiveZoteroPane();
+      selected = pane?.getSelectedItems?.()?.[0] || null;
+    } catch {
+      return [];
+    }
   }
-
-  // B. 资料窗格选中的条目
+  if (!selected) return [];
+  const attached = isAttachment(selected);
+  const parent = attached ? selected.parentItem : selected;
+  const items: any[] = attached ? [selected] : [];
   try {
-    const pane = Zotero.getActiveZoteroPane();
-    const selected: any[] = (pane && pane.getSelectedItems()) || [];
-    for (const sel of selected) {
-      if (!sel) continue;
-      if (sel.isAttachment) {
-        groups.push({ items: [sel], base: 10 });
-        continue;
-      }
-      const groupItems: any[] = [];
-      if (typeof sel.getAttachments === "function") {
-        for (const id of (sel.getAttachments() || []).slice(0, 30)) {
-          const child: any = Zotero.Items.get(id);
-          if (child && child.isAttachment) groupItems.push(child);
-        }
-      }
-      if (groupItems.length) groups.push({ items: groupItems, base: 10 });
+    for (const id of (parent?.getAttachments?.() || []).slice(0, 30)) {
+      const child = Zotero.Items.get(id);
+      if (isAttachment(child)) items.push(child);
     }
-  } catch (e) {}
-
-  // 阅读器里的附件本身兜底（父条目拿不到时）
-  if (readerItem) groups.push({ items: [readerItem], base: 5 });
-
-  const mode = getSourceMode();
-  const readerID = readerItem ? readerItem.id : 0;
-  const scoreTable = SIBLING_SCORE[mode];
-
-  const out: Cand[] = [];
-  const seen: { [id: number]: boolean } = {};
-  for (const g of groups) {
-    for (const item of g.items) {
-      if (seen[item.id]) continue;
-      seen[item.id] = true;
-      const ext = (() => {
-        try {
-          return (
-            String(item.getFilePath() || "")
-              .split(".")
-              .pop() || ""
-          ).toLowerCase();
-        } catch (e) {
-          return "";
-        }
-      })();
-      const score = scoreTable[ext];
-      if (score === undefined) continue;
-      // auto 模式：正在读的那个文件最优先（读 PDF 就用 PDF，读译文就用译文）；
-      // 其余情况按偏好打分（默认 PDF 优先，可切到译文优先拿 LaTeX）
-      const rank =
-        mode === "auto" && item.id === readerID ? g.base : g.base + 10 + score;
-      const cand = toCandidate(item, rank);
-      if (cand) out.push(cand);
-    }
+  } catch {
+    /* The explicit attachment can still be read without its parent. */
   }
-  out.sort((a, b) => a.rank - b.rank);
-  return out;
+  const mode = getSourceMode();
+  const scoreTable = SIBLING_SCORE[mode];
+  const seen = new Set<number>();
+  const result: Cand[] = [];
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    const candidate = toCandidate(item, 0);
+    if (!candidate || scoreTable[candidate.ext] === undefined) continue;
+    candidate.rank =
+      mode === "auto" && attached && item.id === selected.id
+        ? -1
+        : scoreTable[candidate.ext];
+    result.push(candidate);
+  }
+  return result.sort((a, b) => a.rank - b.rank);
 }
 
 async function readFileText(path: string): Promise<string | null> {
@@ -237,20 +229,79 @@ async function readFileText(path: string): Promise<string | null> {
   return null;
 }
 
+type FileStamp = { modified: number; size: number };
+/** false means missing, null means metadata could not be checked. */
+async function fileStamp(path: string): Promise<FileStamp | false | null> {
+  try {
+    const io = typeof IOUtils === "undefined" ? undefined : IOUtils;
+    if (io?.stat) {
+      try {
+        const info = await io.stat(path);
+        if (info.type === "directory") return false;
+        return Number.isFinite(info.lastModified) && Number.isFinite(info.size)
+          ? { modified: info.lastModified!, size: info.size! }
+          : null;
+      } catch (error: any) {
+        if (error?.name === "NotFoundError") return false;
+        return null;
+      }
+    }
+    const file: any = (Zotero as any).File?.pathToFile?.(path);
+    if (!file) return null;
+    if (!file.exists() || (file.isFile && !file.isFile())) return false;
+    return Number.isFinite(file.lastModifiedTime) &&
+      Number.isFinite(file.fileSize)
+      ? { modified: file.lastModifiedTime, size: file.fileSize }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function pdfCachePath(item: any): string | null {
+  try {
+    const file = (Zotero as any).Fulltext?.getItemCacheFile?.(item);
+    return typeof file === "string" ? file : file?.path || null;
+  } catch {
+    return null;
+  }
+}
+
+async function candidateFingerprint(cand: Cand): Promise<string | null> {
+  const source = await fileStamp(cand.path);
+  if (source === null) return null;
+  if (source === false) return "missing";
+  const cachePath = cand.ext === "pdf" ? pdfCachePath(cand.item) : null;
+  const indexed = cachePath ? await fileStamp(cachePath) : false;
+  if (indexed === null) return null;
+  return JSON.stringify([source, cachePath, indexed]);
+}
+
+type ReadText = { text: string; partial?: boolean };
+
 /**
  * PDF 全文：先读 Zotero 已索引的全文缓存，再退回 PDFWorker 现场抽取全部页。
  * 扫描版 PDF（无文字层）两条路都拿不到内容，返回 null。
  */
-async function readPdfText(item: any): Promise<string | null> {
+async function readPdfText(item: any, path: string): Promise<ReadText | null> {
+  let indexedText: string | null = null;
   // 1) .zotero-ft-cache（Zotero 索引时抽好的全文，秒回）
   try {
-    const cacheFile: any = (Zotero as any).Fulltext?.getItemCacheFile?.(item);
-    const p: string | null =
-      cacheFile &&
-      (cacheFile.path || (typeof cacheFile === "string" ? cacheFile : null));
+    const p = pdfCachePath(item);
     if (p) {
-      const txt = await readFileText(p);
-      if (txt && txt.trim().length > 200) return txt;
+      const [source, indexed] = await Promise.all([
+        fileStamp(path),
+        fileStamp(p),
+      ]);
+      // A stale or only partially indexed PDF must not be presented as full text.
+      if (source && indexed && indexed.modified >= source.modified) {
+        indexedText = await readFileText(p);
+        if (
+          indexedText?.trim() &&
+          (await (Zotero as any).Fulltext?.isFullyIndexed?.(item))
+        )
+          return { text: indexedText };
+      }
     }
   } catch (e) {}
 
@@ -262,43 +313,40 @@ async function readPdfText(item: any): Promise<string | null> {
       true,
     );
     const txt = res && res.text;
-    if (typeof txt === "string" && txt.trim()) return txt;
+    if (typeof txt === "string" && txt.trim())
+      return {
+        text: txt,
+        partial:
+          Number.isFinite(res.extractedPages) &&
+          Number.isFinite(res.totalPages) &&
+          res.extractedPages < res.totalPages,
+      };
   } catch (e) {
     Zotero.logError(new Error("AskGPT 读取 PDF 全文失败: " + e));
   }
 
-  // 3) 兜底：全文检索接口
-  try {
-    const c: any = await (Zotero as any).Fulltext?.getItemContent?.(item.id);
-    if (typeof c === "string" && c.trim()) return c;
-    if (c && typeof c.content === "string" && c.content.trim())
-      return c.content;
-  } catch (e) {}
-
-  return null;
+  // If extraction is unavailable, expose only the fresh partial index as partial.
+  return indexedText?.trim() ? { text: indexedText, partial: true } : null;
 }
 
 /** 读取候选附件里的全文并转成文本 */
-async function readCandidateText(cand: Cand): Promise<string | null> {
+async function readCandidateText(cand: Cand): Promise<ReadText | null> {
   if (cand.ext === "pdf") {
-    return await readPdfText(cand.item);
+    return await readPdfText(cand.item, cand.path);
   }
 
   const raw = await readFileText(cand.path);
   if (raw == null) return null;
 
   if (cand.ext === "md" || cand.ext === "markdown") {
-    return mdToText(raw);
+    return { text: mdToText(raw) };
   }
 
   if (cand.ext === "html" || cand.ext === "htm") {
-    // 优先用同目录伴生 Markdown 源（公式是最完整的 LaTeX）
-    const sib = await tryReadSiblingMd(cand.path);
-    if (sib != null) return mdToText(sib);
-    return htmlToTextWithMath(raw);
+    return { text: htmlToTextWithMath(raw) };
   }
 
-  return raw.trim();
+  return { text: raw.trim() };
 }
 
 /** 超长时按段落边界截断，避免把公式/段落切一半 */
@@ -320,36 +368,100 @@ function truncateText(
 /**
  * 读取「整篇文献」上下文。任何一步失败都返回 null（调用方退回选中文字）。
  */
-export async function readAttachmentContext(): Promise<FullTextContext | null> {
-  try {
-    const cands = collectCandidates();
-    if (!cands.length) return null;
+function cacheResult(key: string, entry: CacheEntry) {
+  const now = Date.now();
+  for (const [name, cached] of fulltextCache) {
+    if (now - cached.ts >= cached.ttl) fulltextCache.delete(name);
+  }
+  fulltextCache.delete(key);
+  fulltextCache.set(key, entry);
+  while (fulltextCache.size > MAX_CACHE_ENTRIES)
+    fulltextCache.delete(fulltextCache.keys().next().value!);
+}
 
-    for (const cand of cands) {
-      const cached = fulltextCache[cand.path];
-      if (cached && Date.now() - cached.ts < CACHE_TTL) return cached;
-
-      const title = getContextTitle(cand.item);
-      const got = await readCandidateText(cand);
-      if (!got || !got.trim()) continue;
-
-      const { text, truncated } = truncateText(got.trim(), MAX_CHARS);
-      const ctx: FullTextContext = {
-        text,
+async function readCachedCandidate(
+  cand: Cand,
+  attempt = 0,
+): Promise<FullTextContext | null> {
+  const generation = cacheGeneration;
+  const fingerprint = await candidateFingerprint(cand);
+  const key = JSON.stringify([cand.item.libraryID, cand.item.id, cand.path]);
+  const cached = fulltextCache.get(key);
+  if (
+    fingerprint !== null &&
+    cached?.fingerprint === fingerprint &&
+    Date.now() - cached.ts < cached.ttl
+  ) {
+    fulltextCache.delete(key);
+    fulltextCache.set(key, cached);
+    return cached.context
+      ? { ...cached.context, title: getContextTitle(cand.item) }
+      : null;
+  }
+  const pendingKey = JSON.stringify([key, fingerprint, generation]);
+  const existing = pendingReads.get(pendingKey);
+  if (existing) {
+    const context = await existing;
+    return context ? { ...context, title: getContextTitle(cand.item) } : null;
+  }
+  const pending = (async () => {
+    const got =
+      fingerprint === "missing" ? null : await readCandidateText(cand);
+    const after = await candidateFingerprint(cand);
+    // A file changed during extraction: never publish or cache the older read.
+    if (fingerprint !== null && fingerprint !== after)
+      return attempt === 0 ? readCachedCandidate(cand, 1) : null;
+    let context: FullTextContext | null = null;
+    if (got?.text.trim()) {
+      const result = truncateText(got.text.trim(), MAX_CHARS);
+      context = {
+        text: result.text,
         label: cand.label,
         path: cand.path,
-        chars: text.length,
-        truncated,
-        title,
+        chars: result.text.length,
+        truncated: result.truncated || !!got.partial,
+        title: getContextTitle(cand.item),
       };
-      fulltextCache[cand.path] = { ...ctx, ts: Date.now() };
-      return ctx;
     }
-    return null;
-  } catch (e) {
-    Zotero.logError(new Error("AskGPT readAttachmentContext: " + e));
-    return null;
+    if (fingerprint !== null && generation === cacheGeneration)
+      cacheResult(key, {
+        context,
+        fingerprint,
+        ts: Date.now(),
+        ttl: context && !got?.partial ? CACHE_TTL : NEGATIVE_CACHE_TTL,
+      });
+    return context;
+  })();
+  pendingReads.set(pendingKey, pending);
+  try {
+    const context = await pending;
+    return context ? { ...context } : null;
+  } finally {
+    if (pendingReads.get(pendingKey) === pending)
+      pendingReads.delete(pendingKey);
   }
+}
+
+export async function readAttachmentContext(
+  options: ContextOptions = {},
+): Promise<FullTextContext | null> {
+  // Snapshot the owning reader, item, and source preference before the first await.
+  const candidates = collectCandidates(options);
+  for (const candidate of candidates) {
+    try {
+      const actual = await resolveCandidate(candidate);
+      const context = await readCachedCandidate(actual);
+      if (context) return context;
+      // An empty Markdown sidecar must not hide readable HTML content.
+      if (actual.path !== candidate.path) {
+        const fallback = await readCachedCandidate(candidate);
+        if (fallback) return fallback;
+      }
+    } catch (error) {
+      Zotero.logError(new Error("AskGPT readAttachmentContext: " + error));
+    }
+  }
+  return null;
 }
 
 /* ============================ HTML → 文本（含公式） ============================ */
@@ -466,11 +578,16 @@ function extractTex(block: string): string | null {
 }
 
 function decodeEntities(s: string): string {
+  const codePoint = (value: number) =>
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= 0x10ffff &&
+    !(value >= 0xd800 && value <= 0xdfff)
+      ? String.fromCodePoint(value)
+      : "\uFFFD";
   return s
-    .replace(/&#x([0-9a-f]+);/gi, (_m, h) =>
-      String.fromCodePoint(parseInt(h, 16)),
-    )
-    .replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, h) => codePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_m, d) => codePoint(parseInt(d, 10)))
     .replace(/&nbsp;/gi, " ")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
@@ -519,70 +636,24 @@ export function mdToText(md: string): string {
 const TRANSLATION_SUFFIX =
   /_(?:离线|中文翻译与精读|中文翻译|中文精读|中文|精读|翻译|translation|translated|译文|cn|zh)$/i;
 
-/** 列出目录下的文件路径（nsIFile 枚举；失败返回空数组） */
-function listDirFiles(dir: string): string[] {
-  const out: string[] = [];
-  try {
-    const f: any = (Zotero as any).File?.pathToFile?.(dir);
-    if (!f || !f.exists() || !f.isDirectory()) return out;
-    const entries = f.directoryEntries;
-    while (entries.hasMoreElements()) {
-      const child: any = entries.getNext();
-      const file =
-        child && child.QueryInterface
-          ? child.QueryInterface(Components.interfaces.nsIFile)
-          : child;
-      const p = file && file.path;
-      if (p) out.push(String(p));
-    }
-  } catch (e) {}
-  return out;
-}
-
-function commonPrefixLen(a: string, b: string): number {
-  const n = Math.min(a.length, b.length);
-  let i = 0;
-  while (i < n && a[i] === b[i]) i++;
-  return i;
-}
-
-/**
- * 找 HTML 附件同目录的伴生 Markdown 源（译文工具生成的 HTML 常带 md 源）：
- *   1. 同名换 .md（XXX_中文翻译.html → XXX_中文翻译.md）
- *   2. 去掉译文后缀再换 .md（DART_中文翻译_离线.html → DART.md）
- *   3. 同目录里与文件名公共前缀最长的 .md（DART_中文翻译_离线.html
- *      ↔ DART_中文翻译与精读.md）
- */
-async function tryReadSiblingMd(htmlPath: string): Promise<string | null> {
-  const base = htmlPath.replace(/\.html?$/i, "");
-  const dir = base.replace(/[\\/][^\\/]*$/, "");
-  const stem = base.replace(/^.*[\\/]/, "");
-
-  const cands = [base + ".md", base.replace(TRANSLATION_SUFFIX, "") + ".md"];
-  for (const p of cands) {
-    if (!p || p === htmlPath) continue;
-    const t = await readFileText(p);
-    if (t != null) return t;
+/** Only explicit same-name sidecars are eligible; a shared name prefix is not evidence. */
+async function resolveCandidate(candidate: Cand): Promise<Cand> {
+  if (candidate.ext !== "html" && candidate.ext !== "htm") return candidate;
+  let base = candidate.path.replace(/\.html?$/i, "");
+  const paths = new Set<string>();
+  for (;;) {
+    paths.add(base + ".md");
+    paths.add(base + ".markdown");
+    const normalized = base.replace(TRANSLATION_SUFFIX, "");
+    if (normalized === base) break;
+    base = normalized;
   }
-
-  // 2) 公共前缀匹配（只在同目录内找，避免认错文件）
-  let best: string | null = null;
-  let bestLen = 0;
-  for (const p of listDirFiles(dir)) {
-    if (!/\.md$/i.test(p)) continue;
-    const mdStem = p.replace(/^.*[\\/]/, "").replace(/\.md$/i, "");
-    const n = commonPrefixLen(stem, mdStem);
-    if (n > bestLen) {
-      bestLen = n;
-      best = p;
-    }
+  for (const path of paths) {
+    const stamp = await fileStamp(path);
+    if (stamp && stamp.size > 0)
+      return { ...candidate, path, ext: "md", label: EXT_LABEL.md };
   }
-  const need = Math.max(6, Math.floor(Math.min(stem.length, 40) * 0.4));
-  if (best && bestLen >= need) {
-    const t = await readFileText(best);
-    if (t != null) return t;
-  }
-  return null;
+  return candidate;
 }
 
 export const _internal = {
@@ -592,4 +663,8 @@ export const _internal = {
   collectCandidates,
   getContextTitle,
   MAX_CHARS,
+  MAX_CACHE_ENTRIES,
+  CACHE_TTL,
+  NEGATIVE_CACHE_TTL,
+  cacheSize: () => fulltextCache.size,
 };

@@ -22,6 +22,7 @@ class Addon {
     dialog?: DialogHelper;
     // AskGPT 扩展状态
     readerSelection?: string;
+    readerSelectionItemID?: number | string;
     readerTitle?: string;
     popupState?: any;
     notifierID?: string;

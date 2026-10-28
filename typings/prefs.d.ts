@@ -11,7 +11,8 @@ declare namespace _ZoteroTypes {
       "apiKey": string;
       "model": string;
       "temperature": number;
-      "webSearch": boolean;
+      "nativeSearch": boolean;
+      "language": string;
       "contextSource": string;
       "fontSize": number;
       "panelSize": string;

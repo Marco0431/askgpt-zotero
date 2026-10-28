@@ -4,14 +4,40 @@
 <groupbox
   onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
 >
-  <label><html:h2>API 配置</html:h2></label>
-  <description>
-    在 PDF 阅读器顶栏点击 AI 按钮，或选中文字后按 Ctrl+K。接口需兼容 OpenAI 风格
-    API。默认 DeepSeek（api.deepseek.com）；硅基流动填
-    https://api.siliconflow.cn/v1。
+  <label><html:h2 data-askgpt-l10n="pref-api">API connection</html:h2></label>
+  <description data-askgpt-l10n="pref-help">
+    Click AI in the PDF reader or select text and press Ctrl+K.
   </description>
   <hbox align="center">
-    <html:label for="askgpt-base-input">接口地址</html:label>
+    <html:label for="askgpt-language-input" data-askgpt-l10n="pref-language"
+      >Interface language</html:label
+    >
+    <html:select
+      id="askgpt-language-input"
+      style="width: 300px"
+      onchange="
+        Zotero.__addonInstance__.hooks.onPrefsEvent('language', { window })
+      "
+    >
+      <html:option value="auto" data-askgpt-l10n="pref-language-auto"
+        >Follow Zotero</html:option
+      >
+      <html:option value="en-US" data-askgpt-l10n="pref-language-english"
+        >English</html:option
+      >
+      <html:option value="zh-CN" data-askgpt-l10n="pref-language-chinese"
+        >简体中文</html:option
+      >
+    </html:select>
+  </hbox>
+  <description data-askgpt-l10n="pref-language-hint"
+    >Applies to AskGPT only. Reopen the chat panel to apply changes
+    there.</description
+  >
+  <hbox align="center">
+    <html:label for="askgpt-base-input" data-askgpt-l10n="pref-base"
+      >API address</html:label
+    >
     <html:input
       type="text"
       id="askgpt-base-input"
@@ -20,7 +46,9 @@
     />
   </hbox>
   <hbox align="center">
-    <html:label for="askgpt-key-input">API Key</html:label>
+    <html:label for="askgpt-key-input" data-askgpt-l10n="pref-key"
+      >API key</html:label
+    >
     <html:input
       type="password"
       id="askgpt-key-input"
@@ -29,7 +57,9 @@
     />
   </hbox>
   <hbox align="center">
-    <html:label for="askgpt-model-input">模型</html:label>
+    <html:label for="askgpt-model-input" data-askgpt-l10n="pref-model"
+      >Model</html:label
+    >
     <html:input
       type="text"
       id="askgpt-model-input"
@@ -38,7 +68,9 @@
     />
   </hbox>
   <hbox align="center">
-    <html:label for="askgpt-temp-input">温度 (0~2)</html:label>
+    <html:label for="askgpt-temp-input" data-askgpt-l10n="pref-temperature"
+      >Temperature (0–2)</html:label
+    >
     <html:input
       type="number"
       id="askgpt-temp-input"
@@ -47,12 +79,21 @@
     />
   </hbox>
   <hbox align="center">
-    <html:label for="askgpt-web-input">允许联网搜索</html:label>
-    <checkbox id="askgpt-web-input" preference="webSearch" native="true" />
+    <html:label for="askgpt-web-input" data-askgpt-l10n="pref-web"
+      >Provider web search</html:label
+    >
+    <checkbox id="askgpt-web-input" preference="nativeSearch" native="true" />
   </hbox>
+  <description data-askgpt-l10n="pref-web-hint">
+    Requires Responses API web_search support and may incur provider fees.
+  </description>
 </groupbox>
 <vbox>
-  <label><html:h2>系统提示词（agent 风格，可自定义）</html:h2></label>
+  <label
+    ><html:h2 data-askgpt-l10n="pref-system"
+      >System prompt (customizable)</html:h2
+    ></label
+  >
   <html:textarea
     id="askgpt-sys-input"
     preference="systemPrompt"
@@ -61,7 +102,9 @@
   />
   <hbox align="center">
     <button
-      label="保存"
+      label="Save"
+      data-askgpt-l10n="pref-save"
+      data-askgpt-l10n-attr="label"
       oncommand="
         Zotero.__addonInstance__.hooks.onPrefsEvent('save', { window })
       "

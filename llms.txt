@@ -2,12 +2,14 @@
 
 > A Zotero plugin for research-paper questions, passage translation, and note-taking with selected text and available attachment context. 中文：Zotero AI 文献阅读助手。
 
-AskGPT uses a user-configured OpenAI-compatible Chat Completions endpoint, including DeepSeek. It provides streaming answers, per-paper conversations, Markdown and KaTeX rendering, and optional web search. Model credentials and service access are supplied by the user. Available document context is sent to that endpoint; optional web-search queries go to DuckDuckGo. Cache behavior and fees depend on the provider. This file is a public documentation map, not an indexing or ranking guarantee.
+AskGPT uses a user-configured OpenAI-compatible Chat Completions endpoint for ordinary chat. Provider web search is disabled by default and requires explicit opt-in, including after upgrades. It uses the Responses API's built-in web_search tool with the same configured API address and key; Chat Completions compatibility alone does not establish search support. DeepSeek's official Responses web_search is documented only for deepseek-v4-pro. Other providers and proxies must support and actually execute the tool; validate search separately from a text connection test. No DuckDuckGo scraping or separate search-service fallback is used.
+
+The plugin provides streaming answers, per-paper conversations, Markdown and KaTeX rendering, model discovery, connection testing, and image attachments where supported. Available document context, conversation history, and submitted images go to the configured provider, which also handles enabled searches. Search and testing can incur provider tool and model-token charges. Search support does not imply image support. Cache behavior, capabilities, and fees depend on the provider. This file is a public documentation map, not an indexing or ranking guarantee.
 
 ## Documentation
 
-- [Chinese README](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/README.md): Installation, settings, usage, features, and acknowledgements.
-- [English guide](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/README.en.md): Quick start, requirements, data flow, and development.
+- [English README](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/README.md): Default guide with installation, API setup, image input, data flow, and development.
+- [Chinese README](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/README.zh-CN.md): Complete Chinese guide with installation, settings, usage, features, and acknowledgements.
 - [Releases](https://github.com/Marco0431/askgpt-zotero/releases): Published XPI plugin assets and release history.
 - [Issue tracker](https://github.com/Marco0431/askgpt-zotero/issues): Bug reports and feature discussions.
 
@@ -15,7 +17,8 @@ AskGPT uses a user-configured OpenAI-compatible Chat Completions endpoint, inclu
 
 - [Attachment context reader](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/src/modules/fulltext.ts): Supported attachment formats, context limits, and fallback behavior.
 - [Reader integration](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/src/modules/reader.ts): Text selection, reader button, and keyboard shortcuts.
-- [Panel requests](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/addon/content/scripts/popup.js): Chat Completions, streaming, and optional web search.
+- [Panel requests](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/addon/content/scripts/popup.js): Ordinary Chat Completions, streaming, and optional provider-native Responses web search.
+- [Connection and image helpers](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/addon/content/scripts/client.js): Endpoint handling, model discovery, connection testing, and image validation.
 
 ## Optional
 
