@@ -3,7 +3,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
     <meta charset="utf-8" />
-    <title>AskGPT · 文献问答</title>
+    <title data-i18n="page.title">AskGPT · 文献问答</title>
     <link
       rel="stylesheet"
       type="text/css"
@@ -21,15 +21,25 @@
         <div id="brand">
           <span id="logo">✎</span>
           <span id="title">AskGPT</span>
-          <span id="model-badge" title="当前模型">…</span>
+          <span
+            id="model-badge"
+            title="当前模型"
+            data-i18n-title="model.current"
+            >…</span
+          >
         </div>
         <div id="actions">
           <span id="ctx-badge" class="ctx-badge hidden"
             ><span id="ctx-text"></span
           ></span>
           <span id="focus-badge" class="ctx-badge focus hidden">
-            <span id="focus-label">🎯 选中 0 字</span>
-            <button id="focus-clear" class="badge-x" title="清除选中段落">
+            <span id="focus-label"></span>
+            <button
+              id="focus-clear"
+              class="badge-x"
+              title="清除选中段落"
+              data-i18n-title="focus.clear"
+            >
               ✕
             </button>
           </span>
@@ -37,126 +47,301 @@
             id="askgpt-save-btn"
             class="icon-btn"
             title="把最后一条 AI 回答存为 Zotero 笔记"
+            data-i18n-title="note.saveTitle"
+            data-i18n="note.save"
           >
             存为笔记
           </button>
-          <button id="btn-new" class="icon-btn" title="新对话">＋</button>
+          <button
+            id="btn-new"
+            class="icon-btn"
+            title="新对话"
+            data-i18n-title="chat.new"
+          >
+            ＋
+          </button>
         </div>
       </header>
 
-      <section id="settings" class="hidden">
+      <section
+        id="settings"
+        class="hidden"
+        aria-label="设置"
+        data-i18n-aria-label="settings.title"
+      >
         <div id="settings-head">
-          <span id="settings-title">⚙ 设置</span>
+          <div>
+            <h1 id="settings-title" data-i18n="settings.title">设置</h1>
+            <p class="settings-subtitle" data-i18n="settings.subtitle">
+              连接你的模型，按你的习惯阅读。
+            </p>
+          </div>
           <button
             id="btn-settings-close"
             class="icon-btn"
-            title="关闭设置（Esc）"
+            title="取消并返回对话（Esc）"
+            data-i18n-title="settings.closeTitle"
+            aria-label="取消并返回对话"
+            data-i18n-aria-label="settings.close"
           >
-            ✕
+            ×
           </button>
         </div>
-        <div class="form-row">
-          <label>接口地址 (OpenAI 兼容)</label>
-          <input
-            type="text"
-            id="set-base"
-            placeholder="https://api.deepseek.com"
-          />
-        </div>
-        <div class="form-row">
-          <label>API Key</label>
-          <input type="password" id="set-key" placeholder="sk-..." />
-        </div>
-        <div class="form-row">
-          <label>模型</label>
-          <input
-            type="text"
-            id="set-model"
-            list="askgpt-model-list"
-            placeholder="deepseek-chat"
-          />
-          <datalist id="askgpt-model-list">
-            <option value="deepseek-chat"></option>
-            <option value="deepseek-reasoner"></option>
-            <option value="gpt-4o"></option>
-            <option value="gpt-4o-mini"></option>
-            <option value="gpt-4.1"></option>
-            <option value="gpt-4.1-mini"></option>
-            <option value="o3-mini"></option>
-            <option value="claude-sonnet-4.5"></option>
-            <option value="claude-sonnet-4.0"></option>
-            <option value="claude-opus-4.1"></option>
-            <option value="gemini-2.5-pro"></option>
-            <option value="gemini-2.5-flash"></option>
-            <option value="qwen-plus"></option>
-            <option value="qwen-max"></option>
-            <option value="glm-4.5"></option>
-            <option value="glm-4.6"></option>
-            <option value="kimi-latest"></option>
-            <option value="moonshot-v1-8k"></option>
-            <option value="llama3.3-70b"></option>
-            <option value="mistral-large-latest"></option>
-          </datalist>
-        </div>
-        <div class="form-row">
-          <label>温度 (0~2)</label>
-          <input type="number" id="set-temp" min="0" max="2" step="0.1" />
-        </div>
-        <div class="form-row form-row-inline">
-          <div class="form-col">
-            <label>字体大小</label>
-            <select id="set-fontsize">
-              <option value="12">12 px（紧凑）</option>
-              <option value="13">13 px</option>
-              <option value="14">14 px（默认）</option>
-              <option value="15">15 px</option>
-              <option value="16">16 px</option>
-              <option value="18">18 px（大字）</option>
+        <div class="settings-scroll">
+          <section class="settings-card form-row">
+            <label for="set-language" data-i18n="language.label"
+              >界面语言 / Language</label
+            >
+            <select id="set-language">
+              <option value="auto" data-i18n="language.auto">
+                跟随 Zotero
+              </option>
+              <option value="zh-CN">简体中文</option>
+              <option value="en-US">English</option>
             </select>
-          </div>
-          <div class="form-col">
-            <label>面板大小（宽 × 高）</label>
-            <div class="panel-size">
-              <input type="number" id="set-panel-w" min="420" max="1600" />
-              <span>×</span>
-              <input type="number" id="set-panel-h" min="360" max="1600" />
-            </div>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>整篇文献的来源（下次打开面板生效）</label>
-          <select id="set-ctx-src">
-            <option value="auto">自动：用我正在读的那个文件</option>
-            <option value="pdf">PDF 优先：始终送原始 PDF 全文</option>
-            <option value="translation">
-              译文优先：用译文附件（公式是 LaTeX）
-            </option>
-          </select>
-        </div>
-        <div class="form-row">
-          <label>系统提示词</label>
-          <textarea id="set-sys" rows="5" spellcheck="false"></textarea>
-        </div>
-        <div class="form-row checkbox-row">
-          <label
-            ><input type="checkbox" id="set-web" />
-            允许联网搜索（自动决定何时搜）</label
+            <p class="field-hint" data-i18n="language.hint">
+              选择后立即预览，保存后生效。自定义提示词和已有对话保持原样。
+            </p>
+          </section>
+          <section
+            class="settings-card connection-card"
+            aria-labelledby="connection-title"
           >
+            <h2 id="connection-title" data-i18n="connection.title">模型连接</h2>
+            <p class="field-hint" data-i18n="connection.hint">
+              支持 OpenAI 兼容接口。获取模型或测试连接时使用下方填写的配置。
+            </p>
+            <div class="form-row">
+              <label for="set-base" data-i18n="connection.base">API 地址</label>
+              <input
+                type="url"
+                id="set-base"
+                placeholder="https://api.deepseek.com"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <p class="field-hint" data-i18n="connection.baseHint">
+                可填写服务地址、带 /v1 的地址或完整的 /chat/completions 地址。
+              </p>
+            </div>
+            <div class="form-row">
+              <label for="set-key">API Key</label>
+              <div class="input-action">
+                <input
+                  type="password"
+                  id="set-key"
+                  placeholder="粘贴 API Key，本地服务可留空"
+                  data-i18n-placeholder="connection.keyPlaceholder"
+                  autocomplete="off"
+                /><button
+                  id="btn-toggle-key"
+                  class="secondary"
+                  type="button"
+                  aria-pressed="false"
+                  data-i18n="connection.show"
+                >
+                  显示
+                </button>
+              </div>
+            </div>
+            <div class="form-row">
+              <label for="set-model" data-i18n="model.label">模型</label>
+              <div class="input-action">
+                <input
+                  type="text"
+                  id="set-model"
+                  list="askgpt-model-list"
+                  placeholder="输入模型 ID，或从接口获取"
+                  data-i18n-placeholder="model.placeholder"
+                  spellcheck="false"
+                /><button
+                  id="btn-fetch-models"
+                  class="secondary"
+                  type="button"
+                  data-i18n="model.fetch"
+                >
+                  获取模型
+                </button>
+              </div>
+              <datalist id="askgpt-model-list"></datalist>
+              <select
+                id="set-model-select"
+                class="hidden"
+                aria-label="选择获取到的模型"
+                data-i18n-aria-label="model.selectLabel"
+              >
+                <option value="" data-i18n="model.select">选择模型</option>
+              </select>
+              <p id="model-hint" class="field-hint" data-i18n="model.hint">
+                可直接输入模型 ID；部分服务不提供模型列表。
+              </p>
+            </div>
+            <div class="form-row checkbox-row native-search-option">
+              <label for="set-web"
+                ><input type="checkbox" id="set-web" /><span
+                  data-i18n="reading.web"
+                  >原生联网搜索</span
+                ></label
+              >
+              <p class="field-hint" data-i18n="reading.webHint">
+                使用当前模型服务商的原生搜索，需要接口和模型支持；可能产生搜索费用。
+              </p>
+            </div>
+            <div class="connection-actions">
+              <button
+                id="btn-test-connection"
+                class="secondary"
+                type="button"
+                data-i18n="connection.test"
+              >
+                测试连接
+              </button>
+              <button
+                id="btn-test-search"
+                class="secondary"
+                type="button"
+                data-i18n="search.test"
+              >
+                测试原生搜索
+              </button>
+            </div>
+            <p class="field-hint" data-i18n="connection.testHint">
+              测试可能产生模型或搜索费用，不包含你的论文、对话或图片。
+            </p>
+            <p id="connection-status" role="status" aria-live="polite"></p>
+          </section>
+          <details class="settings-card">
+            <summary>
+              <span class="summary-title" data-i18n="reading.title"
+                >阅读与回答</span
+              ><span class="summary-hint" data-i18n="reading.subtitle"
+                >上下文、联网和提示词</span
+              >
+            </summary>
+            <div class="details-body">
+              <div class="form-row">
+                <label for="set-ctx-src" data-i18n="reading.source"
+                  >文献来源（下次打开面板生效）</label
+                ><select id="set-ctx-src">
+                  <option value="auto" data-i18n="reading.auto">
+                    当前正在阅读的附件
+                  </option>
+                  <option value="pdf" data-i18n="reading.pdf">
+                    优先使用原始 PDF
+                  </option>
+                  <option value="translation" data-i18n="reading.translation">
+                    优先使用译文附件
+                  </option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label for="set-temp" data-i18n="reading.temperature"
+                  >回答随机度（0–2）</label
+                ><input
+                  type="number"
+                  id="set-temp"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                />
+              </div>
+              <div class="form-row">
+                <label for="set-sys" data-i18n="reading.prompt"
+                  >系统提示词</label
+                ><textarea id="set-sys" rows="6" spellcheck="false"></textarea>
+              </div>
+            </div>
+          </details>
+          <details class="settings-card">
+            <summary>
+              <span class="summary-title" data-i18n="appearance.title"
+                >外观</span
+              ><span class="summary-hint" data-i18n="appearance.subtitle"
+                >字号与面板尺寸</span
+              >
+            </summary>
+            <div class="details-body form-row-inline">
+              <div class="form-row form-col">
+                <label for="set-fontsize" data-i18n="appearance.font"
+                  >字体大小</label
+                ><select id="set-fontsize">
+                  <option value="12">12 px</option>
+                  <option value="13">13 px</option>
+                  <option value="14" data-i18n="appearance.defaultFont">
+                    14 px（默认）
+                  </option>
+                  <option value="15">15 px</option>
+                  <option value="16">16 px</option>
+                  <option value="18">18 px</option>
+                </select>
+              </div>
+              <div class="form-row form-col">
+                <label for="set-panel-w" data-i18n="appearance.size"
+                  >面板宽 × 高</label
+                >
+                <div class="panel-size">
+                  <input
+                    type="number"
+                    id="set-panel-w"
+                    min="420"
+                    max="1600"
+                    aria-label="面板宽度"
+                    data-i18n-aria-label="appearance.width"
+                  /><span>×</span
+                  ><input
+                    type="number"
+                    id="set-panel-h"
+                    min="360"
+                    max="1600"
+                    aria-label="面板高度"
+                    data-i18n-aria-label="appearance.height"
+                  />
+                </div>
+              </div>
+            </div>
+          </details>
+          <details class="settings-card">
+            <summary>
+              <span class="summary-title" data-i18n="diagnostics.title"
+                >诊断</span
+              ><span class="summary-hint" data-i18n="diagnostics.subtitle"
+                >查看最近一次错误</span
+              >
+            </summary>
+            <div class="details-body form-row">
+              <label for="set-lasterr" data-i18n="diagnostics.label"
+                >最近一次面板错误</label
+              ><textarea
+                id="set-lasterr"
+                rows="4"
+                readonly="readonly"
+                spellcheck="false"
+              ></textarea
+              ><button
+                id="btn-clear-err"
+                class="link-btn"
+                data-i18n="diagnostics.clear"
+              >
+                清除记录
+              </button>
+            </div>
+          </details>
+          <p class="settings-privacy" data-i18n="settings.privacy">
+            设置保存在本机。提问时，文献内容、对话和附加图片会发送到你配置的
+            API。连接测试不包含论文、对话或图片。
+          </p>
         </div>
         <div class="form-actions">
-          <button id="btn-save" class="primary">保存设置</button>
-          <button id="btn-settings-close2" class="secondary">关闭</button>
-          <span id="save-status"></span>
-        </div>
-        <div class="form-row diag-row">
-          <label>最近一次面板错误（反馈问题时把这里复制给我）</label>
-          <textarea
-            id="set-lasterr"
-            rows="3"
-            readonly="readonly"
-            spellcheck="false"
-          ></textarea>
-          <button id="btn-clear-err" class="link-btn">清除记录</button>
+          <span id="save-status" role="status" aria-live="polite"></span
+          ><button
+            id="btn-settings-close2"
+            class="secondary"
+            data-i18n="settings.cancel"
+          >
+            取消</button
+          ><button id="btn-save" class="primary" data-i18n="settings.save">
+            保存并返回
+          </button>
         </div>
       </section>
 
@@ -164,24 +349,40 @@
         <button
           class="chip"
           data-q="请用中文详细解释这段话的核心内容，并说明其在该文献中的作用"
+          data-i18n-data-q="chip.explainQuestion"
+          data-i18n="chip.explain"
         >
           解释这段话
         </button>
-        <button class="chip" data-q="请把这段话翻译成中文，尽量贴合学术语境">
+        <button
+          class="chip"
+          data-q="请把这段话翻译成中文，尽量贴合学术语境"
+          data-i18n-data-q="chip.translateQuestion"
+          data-i18n="chip.translate"
+        >
           翻译成中文
         </button>
-        <button class="chip" data-q="请总结这段话的主要观点，并给出三点要点">
+        <button
+          class="chip"
+          data-q="请总结这段话的主要观点，并给出三点要点"
+          data-i18n-data-q="chip.summarizeQuestion"
+          data-i18n="chip.summarize"
+        >
           总结要点
         </button>
         <button
           class="chip"
           data-q="请从批判性角度评价这段话，指出可能的局限或值得推敲之处"
+          data-i18n-data-q="chip.critiqueQuestion"
+          data-i18n="chip.critique"
         >
           批判性评价
         </button>
         <button
           class="chip"
           data-q="关于这段话，联网搜索一下相关的最新研究或概念，并简要说明联系"
+          data-i18n-data-q="chip.searchQuestion"
+          data-i18n="chip.search"
         >
           联网扩展阅读
         </button>
@@ -189,18 +390,63 @@
 
       <main id="chat">
         <div id="messages"></div>
-        <div id="empty-tip">在下面输入问题，或点上方快捷提示开始。</div>
+        <div id="empty-tip" data-i18n="chat.empty">
+          选一段文字，问一个问题。也可以添加论文截图一起讨论。
+        </div>
       </main>
 
+      <section
+        id="attachments"
+        class="hidden"
+        aria-label="待发送图片"
+        data-i18n-aria-label="image.pending"
+      >
+        <div id="attachment-list"></div>
+        <p id="attachment-hint" data-i18n="image.hint">
+          需要支持图片的模型；发送后图片会随对话提供给当前 API。
+        </p>
+      </section>
       <footer id="inputbar">
+        <input
+          id="image-input"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          multiple="multiple"
+          class="hidden"
+        />
+        <button
+          id="btn-attach"
+          class="secondary"
+          title="添加图片（也可粘贴截图）"
+          data-i18n-title="image.addTitle"
+          aria-label="添加图片"
+          data-i18n-aria-label="image.add"
+          data-i18n="image.button"
+        >
+          ＋ 图片
+        </button>
         <textarea
           id="input"
           rows="2"
-          placeholder="输入问题…（Enter 发送，Shift+Enter 换行）"
+          placeholder="输入问题，或粘贴截图…"
+          data-i18n-placeholder="input.placeholder"
+          aria-label="问题"
+          data-i18n-aria-label="input.label"
         ></textarea>
-        <button id="btn-settings" class="icon-btn" title="设置">⚙</button>
-        <button id="btn-stop" class="secondary hidden">停止</button>
-        <button id="btn-send" class="primary">发送</button>
+        <button
+          id="btn-settings"
+          class="icon-btn"
+          title="设置"
+          data-i18n-title="settings.title"
+        >
+          ⚙
+        </button>
+        <button id="btn-stop" class="secondary hidden" data-i18n="chat.stop">
+          停止
+        </button>
+        <button id="btn-send" class="primary" data-i18n="chat.send">
+          发送
+        </button>
       </footer>
       <div id="statusline"></div>
     </div>
@@ -217,6 +463,22 @@
     <script
       type="application/javascript"
       src="chrome://askgpt/content/scripts/mathrender.js"
+    ></script>
+    <script
+      type="application/javascript"
+      src="chrome://askgpt/content/scripts/prompts.js"
+    ></script>
+    <script
+      type="application/javascript"
+      src="chrome://askgpt/content/scripts/i18n.js"
+    ></script>
+    <script
+      type="application/javascript"
+      src="chrome://askgpt/content/scripts/client.js"
+    ></script>
+    <script
+      type="application/javascript"
+      src="chrome://askgpt/content/scripts/native-search.js"
     ></script>
     <script
       type="application/javascript"

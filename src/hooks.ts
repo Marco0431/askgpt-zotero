@@ -1,5 +1,4 @@
-import { getString, initLocale } from "./utils/locale";
-import { createZToolkit } from "./utils/ztoolkit";
+import { initLocale } from "./utils/locale";
 import { registerPrefs, handlePrefsEvent, savePrefs } from "./modules/prefs";
 import {
   registerReader,
@@ -8,9 +7,13 @@ import {
   unregisterContextMenu,
   attachToReader,
   registerNotifier,
+  unregisterReader,
 } from "./modules/reader";
-import { openAskPopup, hideAskPopup } from "./modules/popup";
+import { openAskPopup, hideAskPopup, disposeAskPopup } from "./modules/popup";
+import { clearFullTextCache } from "./modules/fulltext";
 import { runGeckoDiagnostics } from "./modules/diag";
+
+const windowCleanups = new Map<Window, () => void>();
 
 async function onStartup() {
   await Promise.all([
@@ -43,7 +46,7 @@ async function onStartup() {
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
-  addon.data.ztoolkit = createZToolkit();
+  if (windowCleanups.has(win)) return;
 
   registerContextMenu(win);
 
@@ -59,36 +62,48 @@ async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
   } catch (e) {}
 
   // Ctrl+K 快捷键（主窗口文档级，PDF iframe 内由 reader.ts 挂载）
-  win.document.addEventListener(
-    "keydown",
-    (ev: KeyboardEvent) => {
-      const k = ev.key || "";
-      if (k.toLowerCase() !== "k") return;
-      if (!ev.ctrlKey && !ev.metaKey) return;
-      if (ev.shiftKey || ev.altKey) return;
-      const target = ev.target as HTMLElement | null;
-      const tag = (target && target.tagName) || "";
-      if (
-        tag === "INPUT" ||
-        tag === "TEXTAREA" ||
-        (target && target.isContentEditable)
-      ) {
-        return;
-      }
-      ev.preventDefault();
-      ev.stopPropagation();
-      openAskPopup();
-    },
-    true,
+  const onKeyDown = (ev: KeyboardEvent) => {
+    const k = ev.key || "";
+    if (k.toLowerCase() !== "k") return;
+    if (!ev.ctrlKey && !ev.metaKey) return;
+    if (ev.shiftKey || ev.altKey) return;
+    const target = ev.target as HTMLElement | null;
+    const tag = ((target && target.tagName) || "").toUpperCase();
+    if (
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      (target && target.isContentEditable)
+    ) {
+      return;
+    }
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (ev.repeat) return;
+    void openAskPopup({ window: win });
+  };
+  win.document.addEventListener("keydown", onKeyDown, true);
+  windowCleanups.set(win, () =>
+    win.document.removeEventListener("keydown", onKeyDown, true),
   );
 }
 
 async function onMainWindowUnload(win: Window): Promise<void> {
-  ztoolkit.unregisterAll();
+  windowCleanups.get(win)?.();
+  windowCleanups.delete(win);
+  disposeAskPopup(win);
+  unregisterReader(win);
   unregisterContextMenu(win);
 }
 
 function onShutdown(): void {
+  for (const [win, cleanup] of windowCleanups) {
+    cleanup();
+    unregisterContextMenu(win);
+  }
+  windowCleanups.clear();
+  unregisterReader();
+  disposeAskPopup();
+  clearFullTextCache();
   ztoolkit.unregisterAll();
   addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed
@@ -102,7 +117,8 @@ export default {
   onMainWindowUnload,
   onNotify: async () => {},
   onPrefsEvent: async (type: string, data: { [key: string]: any }) => {
-    if (type === "load") handlePrefsEvent(type, data);
+    if (type === "save") savePrefs(data.window);
+    else handlePrefsEvent(type, data);
   },
   onShortcuts: () => {},
   onDialogEvents: () => {},

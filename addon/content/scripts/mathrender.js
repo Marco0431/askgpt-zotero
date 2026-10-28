@@ -4,8 +4,8 @@
  * - Markdown：markdown-it（随插件打包，addon/content/vendor/markdown-it.min.js）
  * - 数学公式：KaTeX（随插件打包，addon/content/vendor/katex/），
  *   支持 $$...$$、\[...\]、\(...\)、$...$
- * - 代码块 / 行内代码先占位保护，不会被公式或强调语法破坏
- * - 兜底：若 vendor 脚本没加载成功，退回内置的极简 Markdown 渲染（不会白屏）
+ * - 数学公式由 markdown-it token 规则处理，代码、链接属性不经过文本替换
+ * - 兜底：vendor 不可用时保留转义后的完整源码；KaTeX 采用有界缓存和渲染预算
  *
  * 对外接口（window.AskGPTRender）：
  *   renderMarkdown(text)        → AI 回答的 HTML（Markdown + 公式）
@@ -16,8 +16,18 @@
 (function () {
   "use strict";
 
-  var PH = "@@AGMATH"; // 公式占位符前缀
-  var MAX_MATH_RENDER = 600; // 单次预览最多渲染的公式数量（防极端长文档卡顿）
+  var MAX_MATH_RENDER = 600;
+  var MAX_KATEX_CALLS = 128;
+  var MAX_TEX_LENGTH = 8192;
+  var MAX_NEW_TEX_CHARS = 32000;
+  var MAX_BLOCK_SCAN_CHARS = 64000;
+  var MAX_OUTPUT_HTML = 1500000;
+  var MAX_CACHE_ENTRIES = 600;
+  var MAX_CACHE_CHARS = 2000000;
+  var MAX_CACHE_ITEM_CHARS = 128000;
+  var mathCache = new Map();
+  var cacheChars = 0;
+  var cacheRenderer = null;
 
   function hasMd() {
     return typeof window.markdownit === "function";
@@ -27,231 +37,353 @@
       window.katex && typeof window.katex.renderToString === "function"
     );
   }
-
-  /* ------------------------------ 基础工具 ------------------------------ */
-
-  function escapeHtml(s) {
-    return String(s)
+  function escapeHtml(value) {
+    return String(value)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
   }
-
-  function katexHtml(tex, display) {
-    if (!hasKatex()) return null;
-    try {
-      return window.katex.renderToString(tex, {
-        displayMode: !!display,
-        throwOnError: false,
-        strict: false,
-        trust: false,
-        output: "html",
-      });
-    } catch (e) {
-      return null;
+  function budget() {
+    return {
+      mathCount: 0,
+      calls: 0,
+      texChars: 0,
+      htmlChars: 0,
+      blockScanChars: 0,
+    };
+  }
+  function renderMath(token, env) {
+    var limits = env.askgptMath || (env.askgptMath = budget());
+    var tex = token.content;
+    var display = token.type === "ag_math_block" || token.meta.display;
+    var className = display ? "ag-math-block" : "ag-math-inline";
+    var raw = token.meta.raw;
+    var fallback =
+      '<span class="' +
+      className +
+      ' ag-math-source">' +
+      escapeHtml(raw) +
+      "</span>";
+    limits.mathCount++;
+    if (
+      !hasKatex() ||
+      limits.mathCount > MAX_MATH_RENDER ||
+      tex.length > MAX_TEX_LENGTH
+    )
+      return fallback;
+    var renderer = window.katex.renderToString;
+    // A vendor arriving late or being replaced must not reuse stale/fallback HTML.
+    if (renderer !== cacheRenderer) {
+      mathCache.clear();
+      cacheChars = 0;
+      cacheRenderer = renderer;
     }
-  }
-
-  /**
-   * 抽出文本里的数学公式，返回 { text, math:[{tex, display, html}] }，
-   * 公式位置替换成占位符 @@AGMATH<i>@@（不含 < >，markdown-it 原样保留）。
-   * 未闭合的公式（流式输出中途）保持原样，不会破坏排版。
-   */
-  function extractMath(src) {
-    var math = [];
-    var t = String(src || "");
-
-    function push(tex, display) {
-      var i = math.length;
-      var html = katexHtml(tex, display);
-      math.push({ tex: tex, display: !!display, html: html });
-      return PH + i + "@@";
-    }
-
-    // 1) 块级：$$...$$ 、\[...\]
-    t = t.replace(/\$\$([\s\S]+?)\$\$/g, function (m, inner) {
-      var s = inner.trim();
-      return s ? "\n\n" + push(s, true) + "\n\n" : m;
-    });
-    t = t.replace(/\\\[([\s\S]+?)\\\]/g, function (m, inner) {
-      var s = inner.trim();
-      return s ? "\n\n" + push(s, true) + "\n\n" : m;
-    });
-
-    // 2) 行内：\(...\) 、$...$
-    t = t.replace(/\\\(([\s\S]+?)\\\)/g, function (m, inner) {
-      var s = inner.trim();
-      return s ? push(s, false) : m;
-    });
-    t = t.replace(/\$([^$\n]+?)\$/g, function (m, inner) {
-      var s = inner.trim();
-      // 明显不是公式的（纯中文句子）不处理
-      if (!s || !/[\\^_{}=+\-*/a-zA-Z0-9]/.test(s)) return m;
-      if (/^[\u4e00-\u9fa5\s，。；：、！？（）]+$/.test(s)) return m;
-      return push(s, false);
-    });
-
-    return { text: t, math: math };
-  }
-
-  /** 把占位符换成 KaTeX 渲染结果（超出上限的保持 LaTeX 原文） */
-  function fillMath(html, math) {
-    var limit = Math.min(math.length, MAX_MATH_RENDER);
-    var re = new RegExp(PH + "(\\d+)@@", "g");
-    return html.replace(re, function (m, i) {
-      var item = math[+i];
-      if (!item) return m;
-      if (!item.html || +i >= limit) return escapeHtml(item.tex);
-      if (item.display) {
-        return '<span class="ag-math-block">' + item.html + "</span>";
-      }
-      return '<span class="ag-math-inline">' + item.html + "</span>";
-    });
-  }
-
-  /* --------------------------- 极简兜底渲染 --------------------------- */
-
-  function fallbackMarkdown(text) {
-    var t = escapeHtml(text || "");
-    t = t.replace(
-      /```(\w*)[^\n]*\n?([\s\S]*?)```/g,
-      function (_m, _lang, code) {
-        return '<pre class="md-code"><code>' + code.trim() + "</code></pre>";
-      },
-    );
-    t = t.replace(/`([^`\n]+)`/g, '<code class="md-inline-code">$1</code>');
-    t = t.replace(/^### (.+)$/gm, "<h3>$1</h3>");
-    t = t.replace(/^## (.+)$/gm, "<h2>$1</h2>");
-    t = t.replace(/^# (.+)$/gm, "<h1>$1</h1>");
-    t = t.replace(/^&gt;\s?(.+)$/gm, "<blockquote>$1</blockquote>");
-    t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    t = t.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-    t = t.replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
-    t = t.replace(
-      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-      '<a href="$2" target="_blank">$1</a>',
-    );
-    t = t.replace(/(^|\n)-\s+(.*)/g, "$1<li>$2</li>");
-    t = t.replace(/(^|\n)\s*(\d+)[.、]\s+(.*)/g, "$1<li>$3</li>");
-    return t.replace(/\n/g, "<br/>");
-  }
-
-  /* ------------------------------ 对外接口 ------------------------------ */
-
-  var mdInstance = null;
-  function getMd() {
-    if (!hasMd()) return null;
-    if (!mdInstance) {
-      mdInstance = window.markdownit({
-        html: false, // 不信任模型输出里的 HTML
-        linkify: true,
-        breaks: true,
-      });
-    }
-    return mdInstance;
-  }
-
-  /**
-   * AI 回答渲染：真实 Markdown + 真实公式。
-   */
-  function renderMarkdown(text) {
-    var src = String(text || "");
-    if (!src.trim()) return "";
-
-    // 1) 代码块 / 行内代码先占位（内部内容原样保留，且不参与公式解析）
-    var codes = [];
-    src = src.replace(
-      /```(\w*)[^\n]*\n?([\s\S]*?)```/g,
-      function (_m, lang, code) {
-        codes.push(
-          '<pre class="md-code"><code>' +
-            escapeHtml(code.replace(/\n$/, "")) +
-            "</code></pre>",
-        );
-        return "\n\n@@AGCODE" + (codes.length - 1) + "@@\n\n";
-      },
-    );
-    src = src.replace(/`([^`\n]+)`/g, function (_m, code) {
-      codes.push(
-        '<code class="md-inline-code">' + escapeHtml(code) + "</code>",
-      );
-      return "@@AGCODE" + (codes.length - 1) + "@@";
-    });
-
-    // 2) 修正"看起来没渲染"的标题写法（模型常见的几种畸形写法）
-    src = normalizeHeadings(src);
-
-    // 3) 抽公式
-    var ex = extractMath(src);
-    var body = ex.text;
-
-    // 4) markdown-it 渲染（不可用时退回极简渲染）
-    var md = getMd();
-    var html;
-    if (md) {
-      html = md.render(body);
+    var key = (display ? "display:" : "inline:") + tex;
+    var html = mathCache.get(key);
+    if (html !== undefined) {
+      mathCache.delete(key);
+      mathCache.set(key, html);
     } else {
-      html = fallbackMarkdown(body);
+      if (
+        limits.calls >= MAX_KATEX_CALLS ||
+        limits.texChars + tex.length > MAX_NEW_TEX_CHARS
+      )
+        return fallback;
+      limits.calls++;
+      limits.texChars += tex.length;
+      try {
+        html = renderer.call(window.katex, tex, {
+          displayMode: !!display,
+          throwOnError: true,
+          strict: false,
+          trust: false,
+          maxSize: 20,
+          maxExpand: 1000,
+          output: "html",
+        });
+      } catch (_) {
+        html = "";
+      }
+      if (typeof html !== "string") return fallback;
+      // Cache invalid TeX as a sentinel; preserve each occurrence's original delimiters.
+      if (html.includes('class="katex-error"')) html = "";
+      if (html.length <= MAX_CACHE_ITEM_CHARS) {
+        mathCache.set(key, html);
+        cacheChars += html.length;
+        while (
+          mathCache.size > MAX_CACHE_ENTRIES ||
+          cacheChars > MAX_CACHE_CHARS
+        ) {
+          var oldest = mathCache.keys().next().value;
+          cacheChars -= mathCache.get(oldest).length;
+          mathCache.delete(oldest);
+        }
+      }
     }
-
-    // 5) 还原代码
-    html = html.replace(/@@AGCODE(\d+)@@/g, function (m, i) {
-      return codes[+i] != null ? codes[+i] : m;
-    });
-
-    // 6) 还原公式
-    html = fillMath(html, ex.math);
-
-    // 7) 单独成段的块级公式去掉 <p> 包裹，避免多余空行
-    html = html.replace(
-      /<p>\s*(<span class="ag-math-block">[\s\S]*?<\/span>)\s*<\/p>/g,
-      "$1",
-    );
-
-    return html;
+    if (!html || limits.htmlChars + html.length > MAX_OUTPUT_HTML)
+      return fallback;
+    limits.htmlChars += html.length;
+    return '<span class="' + className + '">' + html + "</span>";
   }
-
-  /**
-   * 标题写法归一化（在 markdown 解析前、代码块已占位后调用）：
-   *   - 全角 ＃＃＃ → ###
-   *   - 标题标记和正文挤在同一行（…：### 3. 特征）→ 拆行
-   *   - 行首被缩进 2+ 空格的标题（会被 Markdown 当成代码块）→ 去掉缩进
-   *   - `###3. 特征` / `###\u00a0特征`（缺空格）→ 补一个空格
-   * 只在「2 个以上 # 且后面是空格/数字/中文数字」时才处理，避免误伤代码里的 #。
-   */
-  function normalizeHeadings(src) {
-    var t = String(src || "").replace(/\r\n?/g, "\n");
-    var HASH_TAIL = "(?=[ \\t]|$|\\d|[一二三四五六七八九十]|\\()";
-    // 全角井号
-    t = t.replace(/^[＃]{2,6}/gm, function (m) {
-      return new Array(m.length + 1).join("#");
-    });
-    // 和正文挤在同一行
-    t = t.replace(
-      new RegExp("([^\\n#\\\\])([ \\t]*)(#{2,6})" + HASH_TAIL, "g"),
-      "$1\n$3",
-    );
-    // 行首缩进（会被当成代码块）
-    t = t.replace(new RegExp("^[ \\t]{2,}(#{1,6})" + HASH_TAIL, "gm"), "$1");
-    // 缺空格 / nbsp
-    t = t.replace(new RegExp("(^|\\n)(#{1,6})(?=[^ \\t\\n#])", "g"), "$1$2 ");
-    t = t.replace(/\u00a0/g, " ");
-    return t;
+  function escaped(src, pos) {
+    var count = 0;
+    while (pos > 0 && src.charAt(--pos) === "\\") count++;
+    return count % 2 === 1;
   }
-
-  /**
-   * 纯文本预览（选中段落 / 全文）：公式真渲染，markdown 标题标记去掉并加粗，
-   * 其余原样转义（预览是"看原文"，不做完整 Markdown 解析）。
-   */
+  function closingAt(src, delimiter, start, end) {
+    var pos = start;
+    while ((pos = src.indexOf(delimiter, pos)) !== -1 && pos < end) {
+      if (!escaped(src, pos)) return pos;
+      pos += delimiter.length;
+    }
+    return -1;
+  }
+  function mathInline(state, silent) {
+    var start = state.pos;
+    var head = state.src.slice(start, start + 2);
+    var open =
+      head === "\\(" || head === "\\[" || head === "$$"
+        ? head
+        : state.src.charAt(start) === "$"
+          ? "$"
+          : "";
+    if (!open) return false;
+    var close = open === "\\(" ? "\\)" : open === "\\[" ? "\\]" : open;
+    var contentStart = start + open.length;
+    if (open === "$" && /\s/.test(state.src.charAt(contentStart))) return false;
+    var end = closingAt(state.src, close, contentStart, state.posMax);
+    if (open === "$" && end !== -1) {
+      // Standard dollar-math boundaries avoid interpreting prices as formulas.
+      if (
+        /\s/.test(state.src.charAt(end - 1)) ||
+        /\d/.test(state.src.charAt(end + 1)) ||
+        state.src.slice(contentStart, end).includes("\n")
+      )
+        return false;
+    }
+    if (end === -1) {
+      if (open === "$") return false;
+      // A streaming formula is still source text; preserve its backslashes and body.
+      if (!silent) {
+        var unfinished = state.push("text", "", 0);
+        unfinished.content = state.src.slice(start, state.posMax);
+      }
+      state.pos = state.posMax;
+      return true;
+    }
+    var content = state.src.slice(contentStart, end).trim();
+    if (!content) return false;
+    if (!silent) {
+      var token = state.push("ag_math_inline", "", 0);
+      token.content = content;
+      token.markup = open;
+      token.meta = {
+        raw: state.src.slice(start, end + close.length),
+        display: open === "$$" || open === "\\[",
+      };
+    }
+    state.pos = end + close.length;
+    return true;
+  }
+  function mathBlock(state, startLine, endLine, silent) {
+    if (state.sCount[startLine] - state.blkIndent >= 4) return false;
+    var start = state.bMarks[startLine] + state.tShift[startLine];
+    var open = state.src.slice(start, start + 2);
+    if (open !== "$$" && open !== "\\[") return false;
+    var close = open === "$$" ? "$$" : "\\]";
+    var limits = state.env.askgptMath || (state.env.askgptMath = budget());
+    if (limits.blockScanChars >= MAX_BLOCK_SCAN_CHARS) return false;
+    var first = state.src.slice(start + 2, state.eMarks[startLine]);
+    var lastLine = startLine;
+    var end = closingAt(first, close, 0, first.length);
+    var pieces = [];
+    limits.blockScanChars += first.length + 1;
+    if (end !== -1) {
+      if (first.slice(end + 2).trim()) return false;
+      pieces.push(first.slice(0, end));
+    } else {
+      pieces.push(first);
+      for (lastLine = startLine + 1; lastLine < endLine; lastLine++) {
+        // Paragraph terminator checks revisit candidate openers. Share a per-render
+        // scan budget so many unfinished display formulas cannot cause quadratic work.
+        if (limits.blockScanChars >= MAX_BLOCK_SCAN_CHARS) return false;
+        if (
+          state.sCount[lastLine] < state.blkIndent &&
+          !state.isEmpty(lastLine)
+        )
+          break;
+        var line = state.getLines(
+          lastLine,
+          lastLine + 1,
+          state.blkIndent,
+          false,
+        );
+        limits.blockScanChars += line.length + 1;
+        end = closingAt(line, close, 0, line.length);
+        if (end !== -1) {
+          if (line.slice(end + 2).trim()) return false;
+          pieces.push(line.slice(0, end));
+          break;
+        }
+        pieces.push(line);
+      }
+      if (end === -1 || lastLine >= endLine) return false;
+    }
+    var content = pieces.join("\n").trim();
+    if (!content) return false;
+    if (silent) return true;
+    var token = state.push("ag_math_block", "", 0);
+    token.block = true;
+    token.content = content;
+    token.markup = open;
+    token.map = [startLine, lastLine + 1];
+    token.meta = {
+      raw: state
+        .getLines(startLine, lastLine + 1, state.blkIndent, false)
+        .trim(),
+      display: true,
+    };
+    state.line = lastLine + 1;
+    return true;
+  }
+  function installMath(md) {
+    md.inline.ruler.before("escape", "askgpt_math", mathInline);
+    md.block.ruler.before("fence", "askgpt_math", mathBlock, {
+      alt: ["paragraph", "reference", "blockquote", "list"],
+    });
+    md.renderer.rules.ag_math_inline = function (tokens, index, options, env) {
+      return renderMath(tokens[index], env);
+    };
+    md.renderer.rules.ag_math_block = function (tokens, index, options, env) {
+      return renderMath(tokens[index], env) + "\n";
+    };
+    var plainText = md.renderer.renderInlineAsText;
+    md.renderer.renderInlineAsText = function (tokens, options, env) {
+      return plainText.call(
+        this,
+        tokens.map(function (token) {
+          return token.type === "ag_math_inline"
+            ? { type: "text", content: token.meta.raw }
+            : token;
+        }),
+        options,
+        env,
+      );
+    };
+  }
+  var mdInstance = null;
+  var plainInstance = null;
+  var mdFactory = null;
+  function getMd(plain) {
+    if (!hasMd()) return null;
+    if (mdFactory !== window.markdownit) {
+      mdFactory = window.markdownit;
+      mdInstance = plainInstance = null;
+    }
+    if (plain ? plainInstance : mdInstance)
+      return plain ? plainInstance : mdInstance;
+    var md = plain
+      ? window.markdownit("zero", { html: false, breaks: true })
+      : window.markdownit({ html: false, linkify: true, breaks: true });
+    if (plain)
+      md.enable(["paragraph", "code", "fence", "text", "newline", "backticks"]);
+    installMath(md);
+    if (plain) {
+      // Preserve code delimiters/indentation too: a plain preview must not rewrite source.
+      ["code", "fence"].forEach(function (name) {
+        var originalRule = md.block.ruler.__rules__.find(function (rule) {
+          return rule.name === name;
+        });
+        var original = originalRule.fn;
+        md.block.ruler.at(
+          name,
+          function (state, start, end, silent) {
+            var count = state.tokens.length;
+            var matched = original(state, start, end, silent);
+            if (matched && !silent && state.tokens.length > count)
+              state.tokens[state.tokens.length - 1].meta = {
+                raw: state.getLines(start, state.line, state.blkIndent, false),
+              };
+            return matched;
+          },
+          { alt: originalRule.alt },
+        );
+      });
+      var backticks = md.inline.ruler.__rules__.find(function (rule) {
+        return rule.name === "backticks";
+      }).fn;
+      md.inline.ruler.at("backticks", function (state, silent) {
+        var start = state.pos;
+        var count = state.tokens.length;
+        var matched = backticks(state, silent);
+        if (matched && !silent && state.tokens.length > count)
+          state.tokens[state.tokens.length - 1].meta = {
+            raw: state.src.slice(start, state.pos),
+          };
+        return matched;
+      });
+      var source = function (tokens, index) {
+        return escapeHtml(
+          tokens[index].meta?.raw || tokens[index].content,
+        ).replace(/\n/g, "<br/>\n");
+      };
+      md.renderer.rules.code_inline = source;
+      md.renderer.rules.code_block = source;
+      md.renderer.rules.fence = source;
+      md.renderer.rules.paragraph_open = function () {
+        return "";
+      };
+      md.renderer.rules.paragraph_close = function () {
+        return "<br/>\n";
+      };
+      plainInstance = md;
+    } else {
+      var inlineCode = md.renderer.rules.code_inline;
+      md.renderer.rules.code_inline = function (
+        tokens,
+        index,
+        options,
+        env,
+        renderer,
+      ) {
+        tokens[index].attrJoin("class", "md-inline-code");
+        return inlineCode(tokens, index, options, env, renderer);
+      };
+      ["code_block", "fence"].forEach(function (name) {
+        var original = md.renderer.rules[name];
+        md.renderer.rules[name] = function (
+          tokens,
+          index,
+          options,
+          env,
+          renderer,
+        ) {
+          return original(tokens, index, options, env, renderer).replace(
+            "<pre",
+            '<pre class="md-code"',
+          );
+        };
+      });
+      mdInstance = md;
+    }
+    return md;
+  }
+  function renderMarkdown(text) {
+    var source = String(text || "");
+    if (!source.trim()) return "";
+    var md = getMd(false);
+    return md
+      ? md.render(source, { askgptMath: budget() })
+      : '<pre class="md-code">' + escapeHtml(source) + "</pre>";
+  }
+  /** Plain preview: preserve Markdown source, except explicitly delimited mathematics. */
   function renderPlainWithMath(text) {
-    var src = normalizeHeadings(String(text || ""));
-    var ex = extractMath(src);
-    var html = escapeHtml(ex.text);
-    html = html.replace(/^[ \t]*(#{1,6})[ \t]*(.+)$/gm, function (_m, _h, t) {
-      return '<span class="ag-md-heading">' + t + "</span>";
-    });
-    html = fillMath(html, ex.math);
-    return html.replace(/\n/g, "<br/>");
+    var source = String(text || "");
+    if (!source) return "";
+    var md = getMd(true);
+    return md
+      ? md.render(source, { askgptMath: budget() })
+      : escapeHtml(source).replace(/\n/g, "<br/>\n");
   }
 
   /**
@@ -269,16 +401,28 @@
       if (!v || !/[_^]/.test(v)) continue;
       var skip = false;
       var p = n.parentElement;
-      while (p && p !== root) {
+      while (p) {
         var tag = p.tagName ? p.tagName.toLowerCase() : "";
-        if (tag === "code" || tag === "pre" || tag === "a") {
+        if (
+          tag === "code" ||
+          tag === "pre" ||
+          tag === "a" ||
+          tag === "sup" ||
+          tag === "sub"
+        ) {
           skip = true;
           break;
         }
-        if (p.classList && p.classList.contains("katex")) {
+        if (
+          p.classList &&
+          (p.classList.contains("katex") ||
+            p.classList.contains("ag-math-inline") ||
+            p.classList.contains("ag-math-block"))
+        ) {
           skip = true;
           break;
         }
+        if (p === root) break;
         p = p.parentElement;
       }
       if (skip) continue;
