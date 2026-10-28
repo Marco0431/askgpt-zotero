@@ -2,7 +2,7 @@ import { assert } from "chai";
 
 describe("AskGPT popup XHTML", function () {
   it("parses as XML and keeps the diagnostic field read-only", async function () {
-    const source = await Zotero.File.getContentsAsync(
+    const source = await Zotero.File.getResourceAsync(
       "chrome://askgpt/content/popup.xhtml",
     );
     const doc = new DOMParser().parseFromString(
