@@ -6,31 +6,54 @@ describe("AskGPT Markdown and mathematical rendering", function () {
   let render: any;
   let calls: { count: number; options: any[] };
 
+  function fixtureError(stage: string, error: any) {
+    const details = [error?.name, error?.message, error?.stack]
+      .filter(Boolean)
+      .join("\n");
+    assert.fail(`Renderer fixture ${stage}: ${details || String(error)}`);
+  }
   function load(path: string) {
-    Services.scriptloader.loadSubScript(
-      "chrome://askgpt/content/" + path,
-      scope,
-    );
+    try {
+      Services.scriptloader.loadSubScript(
+        "chrome://askgpt/content/" + path,
+        scope,
+      );
+    } catch (error) {
+      fixtureError(`loading ${path}`, error);
+    }
   }
   function fresh(vendors = true) {
-    scope = { atob, btoa };
-    scope.window = scope;
-    scope.self = scope;
-    scope.globalThis = scope;
-    if (vendors) {
-      load("vendor/markdown-it.min.js");
-      load("vendor/katex/katex.min.js");
-    }
-    load("scripts/mathrender.js");
-    render = scope.AskGPTRender;
-    calls = { count: 0, options: [] };
-    if (vendors) {
-      const original = scope.katex.renderToString;
-      scope.katex.renderToString = (tex: string, options: any) => {
-        calls.count++;
-        calls.options.push(options);
-        return original.call(scope.katex, tex, options);
-      };
+    try {
+      const host =
+        typeof Zotero.getMainWindow === "function"
+          ? Zotero.getMainWindow()
+          : window;
+      // Keep the native function's Window receiver; do not copy an unbound atob.
+      scope = { atob: (value: string) => host.atob(value) };
+      scope.window = scope;
+      scope.self = scope;
+      scope.globalThis = scope;
+      if (vendors) {
+        load("vendor/markdown-it.min.js");
+        load("vendor/katex/katex.min.js");
+      }
+      load("scripts/mathrender.js");
+      render = scope.AskGPTRender;
+      assert.isFunction(
+        render?.renderMarkdown,
+        "mathrender.js must initialize",
+      );
+      calls = { count: 0, options: [] };
+      if (vendors) {
+        const original = scope.katex.renderToString;
+        scope.katex.renderToString = (tex: string, options: any) => {
+          calls.count++;
+          calls.options.push(options);
+          return original.call(scope.katex, tex, options);
+        };
+      }
+    } catch (error) {
+      fixtureError("initialization", error);
     }
   }
   function mathCount(html: string) {

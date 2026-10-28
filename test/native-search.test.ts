@@ -119,9 +119,10 @@ describe("AskGPT provider-native search", function () {
       AbortController,
       TextDecoder,
       FileReader,
-      atob,
-      setTimeout,
-      clearTimeout,
+      atob: (value: string) => window.atob(value),
+      setTimeout: (callback: () => void, delay?: number) =>
+        window.setTimeout(callback, delay),
+      clearTimeout: (id: number) => window.clearTimeout(id),
     };
     for (const name of [
       ...(language ? ["i18n"] : []),

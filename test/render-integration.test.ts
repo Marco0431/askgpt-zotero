@@ -3,8 +3,13 @@ import { assert } from "chai";
 describe("AskGPT real renderer integration", function () {
   this.timeout(8000);
   let source: string;
+  let testWindow: Window;
 
   before(async function () {
+    testWindow =
+      typeof Zotero.getMainWindow === "function"
+        ? Zotero.getMainWindow()
+        : window;
     source = await Zotero.File.getResourceAsync(
       "chrome://askgpt/content/popup.xhtml",
     );
@@ -13,7 +18,7 @@ describe("AskGPT real renderer integration", function () {
   async function until(predicate: () => boolean, message: string) {
     const deadline = Date.now() + 2000;
     while (!predicate() && Date.now() < deadline)
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => testWindow.setTimeout(resolve, 10));
     assert.isTrue(predicate(), message);
   }
 
@@ -60,7 +65,7 @@ describe("AskGPT real renderer integration", function () {
       throw new Error("No network transport is allowed in renderer tests");
     };
     win.fetch = (url: string, options: any) => transport(url, options);
-    const scope = {
+    const scope: any = {
       window: win,
       self: win,
       globalThis: win,
@@ -78,16 +83,25 @@ describe("AskGPT real renderer integration", function () {
         FILTER_REJECT: 2,
         FILTER_SKIP: 3,
       },
-      atob,
-      setTimeout,
-      clearTimeout,
+      // Gecko's native Window methods require their original Window receiver.
+      atob: (value: string) => testWindow.atob(value),
+      setTimeout: (callback: () => void, delay?: number) =>
+        testWindow.setTimeout(callback, delay),
+      clearTimeout: (timer: number) => testWindow.clearTimeout(timer),
       fetch: win.fetch,
     };
-    const load = (path: string) =>
-      Services.scriptloader.loadSubScript(
-        "chrome://askgpt/content/" + path,
-        scope,
-      );
+    const load = (path: string) => {
+      try {
+        Services.scriptloader.loadSubScript(
+          "chrome://askgpt/content/" + path,
+          scope,
+        );
+      } catch (error: any) {
+        assert.fail(
+          `Cannot load ${path}: ${String(error)}\n${error?.stack || "No script stack available"}`,
+        );
+      }
+    };
     load("vendor/katex/katex.min.js");
     load("vendor/markdown-it.min.js");
     assert.isFunction(win.markdownit);

@@ -2,6 +2,7 @@ import { assert } from "chai";
 
 describe("AskGPT settings and image interaction", function () {
   this.timeout(5000);
+  let testWindow: Window;
 
   const prefix = "extensions.askgpt.";
   const pngData =
@@ -27,6 +28,10 @@ describe("AskGPT settings and image interaction", function () {
   let source: string;
 
   before(async function () {
+    testWindow =
+      typeof Zotero.getMainWindow === "function"
+        ? Zotero.getMainWindow()
+        : window;
     source = await Zotero.File.getResourceAsync(
       "chrome://askgpt/content/popup.xhtml",
     );
@@ -41,14 +46,18 @@ describe("AskGPT settings and image interaction", function () {
   async function until(predicate: () => boolean, message: string) {
     const deadline = Date.now() + 1500;
     while (!predicate() && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => testWindow.setTimeout(resolve, 10));
     }
     assert.isTrue(predicate(), message);
   }
 
   function makeImage() {
     return new File(
-      [Uint8Array.from(atob(pngData), (character) => character.charCodeAt(0))],
+      [
+        Uint8Array.from(testWindow.atob(pngData), (character) =>
+          character.charCodeAt(0),
+        ),
+      ],
       "figure.png",
       { type: "image/png" },
     );
@@ -284,42 +293,36 @@ describe("AskGPT settings and image interaction", function () {
         FILTER_REJECT: 2,
         FILTER_SKIP: 3,
       },
-      atob,
-      setTimeout,
-      clearTimeout,
+      // Native Gecko methods must retain the real Window as their receiver.
+      atob: (value: string) => testWindow.atob(value),
+      setTimeout: (callback: () => void, delay?: number) =>
+        testWindow.setTimeout(callback, delay),
+      clearTimeout: (timer: number) => testWindow.clearTimeout(timer),
       fetch: fetchMock,
+    };
+    const load = (path: string) => {
+      try {
+        Services.scriptloader.loadSubScript(
+          "chrome://askgpt/content/" + path,
+          scope,
+        );
+      } catch (error: any) {
+        assert.fail(
+          `Cannot load ${path}: ${String(error)}\n${error?.stack || "No script stack available"}`,
+        );
+      }
     };
     if (realRenderer) {
       for (const path of [
         "vendor/markdown-it.min.js",
         "vendor/katex/katex.min.js",
         "scripts/mathrender.js",
-      ])
-        Services.scriptloader.loadSubScript(
-          "chrome://askgpt/content/" + path,
-          scope,
-        );
+      ]) {
+        load(path);
+      }
     }
-    Services.scriptloader.loadSubScript(
-      "chrome://askgpt/content/scripts/prompts.js",
-      scope,
-    );
-    Services.scriptloader.loadSubScript(
-      "chrome://askgpt/content/scripts/i18n.js",
-      scope,
-    );
-    Services.scriptloader.loadSubScript(
-      "chrome://askgpt/content/scripts/client.js",
-      scope,
-    );
-    Services.scriptloader.loadSubScript(
-      "chrome://askgpt/content/scripts/native-search.js",
-      scope,
-    );
-    Services.scriptloader.loadSubScript(
-      "chrome://askgpt/content/scripts/popup.js",
-      scope,
-    );
+    for (const path of ["prompts", "i18n", "client", "native-search", "popup"])
+      load(`scripts/${path}.js`);
     doc.dispatchEvent(event(doc, "DOMContentLoaded"));
     const get = (id: string) => doc.getElementById(id) as any;
     const click = (id: string) => get(id).dispatchEvent(event(doc, "click"));
@@ -889,7 +892,7 @@ describe("AskGPT settings and image interaction", function () {
       ui.input(id, value);
       assert.isTrue(ui.requests[0].signal.aborted);
       complete(nativeResponse());
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => testWindow.setTimeout(resolve, 20));
       assert.equal(ui.get("connection-status").textContent, "");
       assert.isFalse(ui.get("btn-test-search").disabled);
       assert.lengthOf(ui.writes, 0);

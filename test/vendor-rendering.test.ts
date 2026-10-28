@@ -4,28 +4,48 @@ describe("AskGPT bundled rendering in Gecko", function () {
   let render: any;
 
   before(function () {
-    // Use the packaged files, including their UMD wrappers, in a fresh scope.
-    // No ready flags or renderer functions are mocked in this suite.
-    const scope: any = { document, navigator, atob, btoa };
-    scope.window = scope;
-    scope.self = scope;
-    scope.globalThis = scope;
-    for (const path of [
-      "vendor/markdown-it.min.js",
-      "vendor/katex/katex.min.js",
-      "scripts/mathrender.js",
-    ]) {
-      Services.scriptloader.loadSubScript(
-        "chrome://askgpt/content/" + path,
-        scope,
+    let stage = "initialization";
+    try {
+      // Load the packaged UMDs in an isolated scope, without replacing their code.
+      const host =
+        typeof Zotero.getMainWindow === "function"
+          ? Zotero.getMainWindow()
+          : window;
+      const scope: any = {
+        document,
+        navigator,
+        atob: (value: string) => host.atob(value),
+      };
+      scope.window = scope;
+      scope.self = scope;
+      scope.globalThis = scope;
+      for (const path of [
+        "vendor/markdown-it.min.js",
+        "vendor/katex/katex.min.js",
+        "scripts/mathrender.js",
+      ]) {
+        stage = `loading ${path}`;
+        Services.scriptloader.loadSubScript(
+          "chrome://askgpt/content/" + path,
+          scope,
+        );
+      }
+      stage = "checking initialized renderers";
+      render = scope.AskGPTRender;
+      assert.isTrue(
+        render?.ready.markdown,
+        "Bundled markdown-it must initialize",
+      );
+      assert.isTrue(render?.ready.katex, "Bundled KaTeX must initialize");
+    } catch (error: any) {
+      const details = [error?.name, error?.message, error?.stack]
+        .filter(Boolean)
+        .join("\n");
+      // Chai errors retain their message when scaffold serializes them as JSON.
+      assert.fail(
+        `Bundled rendering fixture ${stage}: ${details || String(error)}`,
       );
     }
-    render = scope.AskGPTRender;
-    assert.isTrue(
-      render?.ready.markdown,
-      "Bundled markdown-it must initialize",
-    );
-    assert.isTrue(render?.ready.katex, "Bundled KaTeX must initialize");
   });
 
   it("loads packaged vendors and imports their output into a native XHTML document", function () {

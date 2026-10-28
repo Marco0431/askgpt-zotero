@@ -28,9 +28,10 @@ describe("AskGPT connection and image helpers", function () {
       URL,
       AbortController,
       FileReader,
-      atob,
-      setTimeout,
-      clearTimeout,
+      atob: (value: string) => window.atob(value),
+      setTimeout: (callback: () => void, delay?: number) =>
+        window.setTimeout(callback, delay),
+      clearTimeout: (id: number) => window.clearTimeout(id),
     };
     Services.scriptloader.loadSubScript(
       "chrome://askgpt/content/scripts/client.js",
@@ -45,9 +46,10 @@ describe("AskGPT connection and image helpers", function () {
       URL,
       AbortController,
       FileReader,
-      atob,
-      setTimeout,
-      clearTimeout,
+      atob: (value: string) => window.atob(value),
+      setTimeout: (callback: () => void, delay?: number) =>
+        window.setTimeout(callback, delay),
+      clearTimeout: (id: number) => window.clearTimeout(id),
     };
     for (const name of ["i18n", "client"]) {
       Services.scriptloader.loadSubScript(
