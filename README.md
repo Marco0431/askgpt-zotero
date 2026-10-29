@@ -9,6 +9,32 @@ AskGPT adds a question-and-answer panel to the Zotero reader. Select a passage, 
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
 
+## Interface preview
+
+**Ask about text and images.** Attach a paper figure or paste a screenshot alongside your question.
+
+![AskGPT chat with an attached figure and a structured answer](docs/images/askgpt-chat.jpg)
+
+<details>
+<summary>Model settings — API setup, model discovery, and connection tests</summary>
+
+Enter your API details, fetch available models, and test the connection before saving. Image and web-search support depend on your provider and model.
+
+![AskGPT settings with API fields, model discovery, and connection test buttons](docs/images/askgpt-settings.jpg)
+
+</details>
+
+<details>
+<summary>Readable answers — Markdown tables and mathematical notation</summary>
+
+Read formatted explanations, equations, and tables directly in the conversation.
+
+![AskGPT answer with an inline equation, a matrix equation, and a Markdown table](docs/images/askgpt-math.jpg)
+
+</details>
+
+These screenshots show the actual plugin UI in a local browser preview. Paper content and API responses are simulated; the example API address is a placeholder. The interface also supports Simplified Chinese.
+
 ## Install and try
 
 1. Download `askgpt.xpi` from the link above.

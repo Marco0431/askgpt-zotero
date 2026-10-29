@@ -12,6 +12,32 @@ AskGPT is a Zotero plugin for asking questions about research papers without lea
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
 
+## 界面预览
+
+**文字与图片一起问。** 添加论文图表或粘贴截图，结合问题一起讨论。
+
+![AskGPT 对话界面：附带论文图表提问并阅读回答](docs/images/askgpt-chat.jpg)
+
+<details>
+<summary>模型设置：API 配置、获取模型与连接测试</summary>
+
+填写 API 信息、拉取模型列表，测试连接后再保存。图片与联网搜索能力取决于提供商和模型。
+
+![AskGPT 设置界面：API 地址、模型列表和连接测试按钮](docs/images/askgpt-settings.jpg)
+
+</details>
+
+<details>
+<summary>回答排版：Markdown 表格与数学公式</summary>
+
+在对话中直接阅读排版后的解释、公式和表格。
+
+![AskGPT 回答中的行内公式、矩阵公式与 Markdown 表格](docs/images/askgpt-math.jpg)
+
+</details>
+
+以上为插件真实界面的本地浏览器预览，文献内容与 API 回答均为模拟示例，API 地址为占位地址。截图展示英文界面，设置中可切换为简体中文。
+
 ## 快速开始
 
 1. 下载上方的 `askgpt.xpi`，在 Zotero 的 **工具 → 插件** 中选择 **Install Plugin From File…**，安装后重启。
