@@ -9,6 +9,8 @@ AskGPT adds a question-and-answer panel to the Zotero reader. Select a passage, 
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
 
+**Start here:** [Install and ask your first question](#install-and-try) · [API setup](#set-up-your-model-connection) · [Troubleshooting](#troubleshooting) · [Data flow](#requirements-and-data-flow)
+
 ## Interface preview
 
 **Ask about text and images.** Attach a paper figure or paste a screenshot alongside your question.
@@ -45,9 +47,15 @@ These screenshots show the actual plugin UI in a local browser preview. Paper co
 
 The plugin itself does not include API credits. Model requests and the connection test may incur charges from your provider.
 
-Example question:
+For your first conversation, leave web search disabled and choose a PDF whose text you can select. Check the panel's context badge: it shows whether paper text is available, incomplete, or limited to your selection. Then try one of these questions:
 
-> Explain the method in this passage using the paper's context. Identify its assumptions and distinguish what the authors state from your interpretation.
+| Reading task        | Example question                                                                                                                         |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Understand a method | Explain this passage using the paper's context. List its assumptions and distinguish the authors' claims from your interpretation.       |
+| Read a figure       | What do the axes and legend in this attached figure mean? Describe the visible trend and say what the figure alone cannot establish.     |
+| Prepare a note      | Summarize the selected passage in three bullets: the problem, the method, and its limitations. Mark anything the paper does not explain. |
+
+You have completed the first-use flow when an answer appears and **Save note** creates a Zotero note you can reopen. Check the answer against the paper before keeping it; conversations themselves last only for the current Zotero session.
 
 The interface follows Zotero's language by default, with **English** and **简体中文** available in the language selector at the top of Settings. Changing the selector previews the language immediately; **Save and return** keeps your choice, while **Cancel**, **×**, or **Esc** restores the saved language. Use **Save note** to keep an answer in Zotero.
 
@@ -117,7 +125,22 @@ AskGPT requires desktop Zotero and an OpenAI-compatible Chat Completions endpoin
 
 Available paper context, selected text, conversation history, and images you send are transmitted to the model endpoint you configure. Fetching models sends your API credentials to that endpoint; the connection test additionally sends a small test prompt. With provider web search enabled, the configured provider executes searches as part of the response. Local math rendering does not make remote model inference offline.
 
+API settings, including the key, are stored in your local Zotero preferences. The plugin does not add encryption around that stored key. Do not include your Zotero profile, credentials, or private paper text in a public issue.
+
 The plugin keeps a stable system-and-paper prefix where possible, but still sends context with requests. Provider-side cache hits, prices, and context limits depend on the endpoint; the plugin does not guarantee a particular discount. Local full-text caching checks the file version, combines concurrent reads, and has a size limit and expiry. A fresh, complete Zotero index can be reused; partial indexes trigger full extraction where available. The panel marks incomplete or truncated context, and indicates when only selected text is available. Conversations are retained while Zotero is running; save a note to keep an answer beyond that session.
+
+## Troubleshooting
+
+| What you see                         | First check                                                                                                                                         |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No AskGPT panel                      | Confirm the plugin is enabled and restart Zotero after installation. Open a paper and try the reader's **AskGPT** button or `Ctrl+K` / `Cmd+K`.     |
+| Model discovery fails                | Enter the model ID manually, then use **Test connection**. Some compatible endpoints do not expose a model list.                                    |
+| HTTP 401 / 403 / 404                 | Check the API key and its permissions, the API address, and the exact model ID. Use an API endpoint rather than the provider's chat website.        |
+| HTTP 429                             | Check the provider's quota and request limits before retrying.                                                                                      |
+| Only selected text is available      | Check that the attachment contains selectable text. The context badge reports what the plugin could read; scanned PDFs may need OCR outside AskGPT. |
+| Text works but images or search fail | These are separate provider capabilities. Confirm image support, or use **Test web search**; disable search to return to ordinary chat.             |
+
+For a complete Chinese translation with original figures and an offline HTML document, see the separate [pdf-translate-review workflow](https://github.com/Marco0431/pdf-translate-review). It has its own agent and tooling requirements; it is not included in this plugin.
 
 ## Development
 
@@ -143,6 +166,8 @@ Run `npm run check:package` after a build to verify required runtime assets and 
 
 ## Feedback and license
 
-[Report a problem](https://github.com/Marco0431/askgpt-zotero/issues) with your Zotero version, plugin version, provider/model, and reproduction steps. Remove API keys and private paper text from reports.
+[Report a problem or describe a reading workflow](https://github.com/Marco0431/askgpt-zotero/issues/new/choose). The templates ask for the versions and steps needed to reproduce a bug, or the reading task behind a feature request. English and Chinese reports are welcome. Remove API keys and private paper text from reports.
+
+Documentation fixes and small, focused pull requests are welcome. For larger changes, describe the use case in an issue first so the implementation can be discussed. Run the checks in [Development](#development) for code changes.
 
 Licensed under [AGPL-3.0](LICENSE). Built with [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) and [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit). The reader integration also draws on [zotero-pdf-translate](https://github.com/windingwind/zotero-pdf-translate).

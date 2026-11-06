@@ -1,0 +1,32 @@
+name: Bug report / 问题反馈
+description: Help reproduce a plugin, setup, or rendering problem / 提供复现信息
+body:
+  - type: markdown
+    attributes:
+      value: Please omit API keys, private paper text, and Zotero profile files. / 请勿提交密钥、私人文献内容或 Zotero 配置文件。
+  - type: input
+    id: versions
+    attributes:
+      label: Versions and operating system / 版本与系统
+      description: Zotero version, AskGPT version, and Windows/macOS/Linux version.
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model / 提供商与模型
+      description: Include the model ID and whether images or web search are enabled. Never include your key.
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps and expected result / 操作步骤与预期
+      description: Start from opening the paper or settings. A short public example is helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result / 实际结果
+      description: Include the exact error, context badge, or a redacted screenshot where relevant.
+    validations:
+      required: true
