@@ -13,29 +13,26 @@ AskGPT adds a question-and-answer panel to the Zotero reader. Select a passage, 
 
 ## Interface preview
 
-**Ask about text and images.** Attach a paper figure or paste a screenshot alongside your question.
+**A quick tour:** ask about a figure, configure your model, and read formatted answers.
 
-![AskGPT chat with an attached figure and a structured answer](docs/images/askgpt-chat.jpg)
+![Animated tour of AskGPT image questions, model settings, and Markdown and math rendering](docs/images/askgpt-tour.gif)
 
-<details>
-<summary>Model settings — API setup, model discovery, and connection tests</summary>
+<table>
+  <tr>
+    <th>Text and image questions</th>
+    <th>Model connection settings</th>
+    <th>Markdown and math</th>
+  </tr>
+  <tr>
+    <td align="center"><a href="docs/images/askgpt-chat.jpg"><img src="docs/images/askgpt-chat.jpg" height="200" alt="AskGPT chat with an attached paper figure and a structured answer" /></a></td>
+    <td align="center"><a href="docs/images/askgpt-settings.jpg"><img src="docs/images/askgpt-settings.jpg" height="200" alt="API fields, model discovery, and connection test buttons" /></a></td>
+    <td align="center"><a href="docs/images/askgpt-math.jpg"><img src="docs/images/askgpt-math.jpg" height="200" alt="An answer with an inline equation, a matrix equation, and a Markdown table" /></a></td>
+  </tr>
+</table>
 
-Enter your API details, fetch available models, and test the connection before saving. Image and web-search support depend on your provider and model.
+Click a still image to view it at full size. Image and web-search support depend on your provider and model.
 
-![AskGPT settings with API fields, model discovery, and connection test buttons](docs/images/askgpt-settings.jpg)
-
-</details>
-
-<details>
-<summary>Readable answers — Markdown tables and mathematical notation</summary>
-
-Read formatted explanations, equations, and tables directly in the conversation.
-
-![AskGPT answer with an inline equation, a matrix equation, and a Markdown table](docs/images/askgpt-math.jpg)
-
-</details>
-
-These screenshots show the actual plugin UI in a local browser preview. Paper content and API responses are simulated; the example API address is a placeholder. The interface also supports Simplified Chinese.
+These previews show the actual plugin UI in a local browser. Paper content and API responses are simulated, and the API address is a placeholder; no real API connection was tested for these previews. The interface also supports Simplified Chinese.
 
 ## Install and try
 
