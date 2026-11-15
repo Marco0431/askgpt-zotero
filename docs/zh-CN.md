@@ -1,15 +1,13 @@
-[English](README.md) · **简体中文**
+[English](../README.md) · **简体中文**
 
-# AskGPT — Zotero AI 文献阅读助手 / AI Paper Reader
+# AskGPT — Zotero AI 文献阅读助手
 
 > 在 Zotero 里选中论文段落，按 `Ctrl+K` 提问：结合文献全文解释概念、翻译段落，并把回答保存为 Zotero 笔记。
 
-AskGPT is a Zotero plugin for asking questions about research papers without leaving the reader. It combines selected text with available attachment context, streams answers with Markdown and math rendering, and connects to a user-configured OpenAI-compatible API, including DeepSeek.
-
-[下载插件 / Download](https://github.com/Marco0431/askgpt-zotero/releases/latest/download/askgpt.xpi) · [English guide](README.md) · [问题反馈 / Issues](https://github.com/Marco0431/askgpt-zotero/issues) · [文档索引 / llms.txt](llms.txt)
+[下载 askgpt.xpi](https://github.com/Marco0431/askgpt-zotero/releases/latest/download/askgpt.xpi) · [问题反馈](https://github.com/Marco0431/askgpt-zotero/issues) · [文档索引](../llms.txt)
 
 [![Zotero](https://img.shields.io/badge/Zotero-Desktop-blue?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](../LICENSE)
 [![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
 
 **从这里开始：**[安装并完成第一次提问](#快速开始) · [常见问题](#常见问题) · [数据与费用](#数据与费用)
@@ -18,7 +16,7 @@ AskGPT is a Zotero plugin for asking questions about research papers without lea
 
 **快速导览：**带着论文图表提问、配置模型连接、阅读排版后的回答。
 
-![AskGPT 动态导览：图片问答、模型设置及 Markdown 与公式排版](docs/images/askgpt-tour.gif)
+![AskGPT 动态导览：图片问答、模型设置及 Markdown 与公式排版](images/askgpt-tour.gif)
 
 <table>
   <tr>
@@ -27,9 +25,9 @@ AskGPT is a Zotero plugin for asking questions about research papers without lea
     <th>Markdown 与公式</th>
   </tr>
   <tr>
-    <td align="center"><a href="docs/images/askgpt-chat.jpg"><img src="docs/images/askgpt-chat.jpg" height="200" alt="附带论文图表提问，并阅读结构清楚的回答" /></a></td>
-    <td align="center"><a href="docs/images/askgpt-settings.jpg"><img src="docs/images/askgpt-settings.jpg" height="200" alt="API 地址、模型列表与连接测试按钮" /></a></td>
-    <td align="center"><a href="docs/images/askgpt-math.jpg"><img src="docs/images/askgpt-math.jpg" height="200" alt="回答中的行内公式、矩阵公式和 Markdown 表格" /></a></td>
+    <td align="center"><a href="images/askgpt-chat.jpg"><img src="images/askgpt-chat.jpg" height="200" alt="附带论文图表提问，并阅读结构清楚的回答" /></a></td>
+    <td align="center"><a href="images/askgpt-settings.jpg"><img src="images/askgpt-settings.jpg" height="200" alt="API 地址、模型列表与连接测试按钮" /></a></td>
+    <td align="center"><a href="images/askgpt-math.jpg"><img src="images/askgpt-math.jpg" height="200" alt="回答中的行内公式、矩阵公式和 Markdown 表格" /></a></td>
   </tr>
 </table>
 
@@ -39,8 +37,8 @@ AskGPT is a Zotero plugin for asking questions about research papers without lea
 
 ## 快速开始
 
-1. 下载上方的 `askgpt.xpi`，在 Zotero 的 **工具 → 插件** 中选择 **Install Plugin From File…**，安装后重启。
-2. 打开论文，按 `Ctrl+K`（macOS 可用 `Cmd+K`）打开 AskGPT，在面板的 **⚙ 设置** 中填写自己的 API 地址和 API Key。默认接口为 DeepSeek。
+1. 下载上方的 `askgpt.xpi`，打开 Zotero 的 **工具 → 插件**，将文件拖进插件窗口，或从齿轮菜单选择 **Install Plugin From File…**。安装后重启 Zotero。
+2. 打开论文，按 `Ctrl+K`（macOS 使用 `Cmd+K`）或点击阅读器工具栏的 **AskGPT**，在面板的 **⚙ 设置** 中填写自己的 API 地址和 API Key。默认接口为 DeepSeek。
 3. 点击 **获取模型**，选择模型后点击 **测试连接**；接口不提供模型列表时，也可以手动填写模型 ID。确认后保存设置。模型问答和连接测试均可能产生提供商费用。
 4. 选中论文中的一段文字，输入问题；也可以添加或粘贴截图、论文图表一起提问。需要保留回答时点击 **存为笔记**。
 
@@ -157,29 +155,6 @@ AskGPT is a Zotero plugin for asking questions about research papers without lea
 
 ---
 
-## 📦 安装
-
-1. 下载最新版 `.xpi`：[Releases](https://github.com/Marco0431/askgpt-zotero/releases)（文件：`askgpt.xpi`）
-2. Zotero → **工具(Tools) → 插件(Plugins)**
-3. 把 `.xpi` **拖进插件窗口**（或 齿轮 → Install Plugin From File…）
-4. 重启 Zotero
-
-> 首次使用：打开 AskGPT 面板的 **⚙ 设置**，填入 API 地址 / Key，获取或填写模型并测试连接，然后保存。也可在 Zotero 的 **设置 → AskGPT** 中编辑核心配置。
-
----
-
-## 🎮 使用演示
-
-```
-1️⃣ 打开任意 PDF → 选中一段看不懂的文字
-2️⃣ 按 Ctrl+K（或点阅读器工具栏的 AskGPT 按钮）
-3️⃣ 输入问题 → Enter
-4️⃣ 看完回答，选中下一段 → 面板自动切换「选中段落」，继续问
-5️⃣ 点「存为笔记」把回答存进 Zotero 笔记
-```
-
----
-
 ## 常见问题
 
 | 遇到的问题               | 先检查什么                                                                                   |
@@ -214,7 +189,7 @@ npm run build
 # 产物在 .scaffold/build/askgpt.xpi
 ```
 
-`npm test` 的准备步骤会在 `.scaffold/test-fixtures` 生成隔离模块，再运行 Gecko 集成测试。Linux CI 会执行全文缓存、窗口状态、工具栏、请求及真实 Markdown/KaTeX 渲染测试。本地运行集成测试应使用独立开发配置并关闭其他 Zotero 实例，参见 [`.env.example`](.env.example)；仅运行 `npm run test:prepare` 不会启动 Zotero。
+`npm test` 的准备步骤会在 `.scaffold/test-fixtures` 生成隔离模块，再运行 Gecko 集成测试。Linux CI 会执行全文缓存、窗口状态、工具栏、请求及真实 Markdown/KaTeX 渲染测试。本地运行集成测试应使用独立开发配置并关闭其他 Zotero 实例，参见 [`.env.example`](../.env.example)；仅运行 `npm run test:prepare` 不会启动 Zotero。
 
 构建后运行 `npm run check:package` 可核对运行资源及 WOFF2 字体，并防止测试、源码映射或开发文件进入 XPI；CI 构建和发布流程都会执行该检查。
 
@@ -267,7 +242,7 @@ addon/
 
 ## 📄 License
 
-[AGPL-3.0](LICENSE)
+[AGPL-3.0](../LICENSE)
 
 ---
 

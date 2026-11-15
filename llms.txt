@@ -9,7 +9,7 @@ The plugin provides streaming answers, per-paper conversations, Markdown and KaT
 ## Documentation
 
 - [English README](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/README.md): Default guide with installation, API setup, image input, data flow, and development.
-- [Chinese README](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/README.zh-CN.md): Complete Chinese guide with installation, settings, usage, features, and acknowledgements.
+- [Chinese README](https://raw.githubusercontent.com/Marco0431/askgpt-zotero/main/docs/zh-CN.md): Complete Chinese guide with installation, settings, usage, features, and acknowledgements.
 - [Releases](https://github.com/Marco0431/askgpt-zotero/releases): Published XPI plugin assets and release history.
 - [Issue tracker](https://github.com/Marco0431/askgpt-zotero/issues): Bug reports and feature discussions.
 
