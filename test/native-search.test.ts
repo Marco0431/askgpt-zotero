@@ -227,6 +227,24 @@ describe("AskGPT provider-native search", function () {
     assert.equal(deltas.join(""), "中文");
   });
 
+  it("accepts CR-only events on an open connection, including mixed line endings", async function () {
+    for (const separator of ["\r", "\r\n"]) {
+      const raw =
+        `: heartbeat${separator}data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Answer" })}\r\r` +
+        `event: response.completed\ndata: ${JSON.stringify(completed())}\r\r`;
+      const deltas: string[] = [];
+      const result = await native.stream(config, {
+        messages: question,
+        fetchImpl: async () =>
+          streamResponse([], { raw, split: 1, hangAfter: true }),
+        timeoutMs: 500,
+        onDelta: (delta: string) => deltas.push(delta),
+      });
+      assert.deepEqual(deltas, ["Answer"]);
+      assert.equal(result.text, "Answer");
+    }
+  });
+
   it("uses event names when a provider omits JSON type and does not duplicate done/completed text", async function () {
     const events = [
       {
@@ -564,6 +582,60 @@ describe("AskGPT provider-native search", function () {
     );
   });
 
+  it("rejects malformed terminal response data after streamed text", async function () {
+    for (const response of [
+      "completed",
+      [],
+      { status: "completed", output: "pending" },
+    ]) {
+      await failure(
+        () =>
+          native.stream(config, {
+            messages: question,
+            fetchImpl: async () =>
+              streamResponse([
+                { type: "response.output_text.delta", delta: "Partial" },
+                { type: "response.completed", response },
+              ]),
+          }),
+        "protocol",
+      );
+    }
+  });
+
+  it("validates final assistant content before confirming streamed text", async function () {
+    const delta = {
+      type: "response.output_text.delta",
+      item_id: "msg-1",
+      delta: "Part",
+    };
+    for (const content of [
+      "Final answer",
+      [null],
+      [{ type: "output_text", text: null }],
+      [{ type: "refusal", refusal: null }],
+    ]) {
+      await failure(
+        () =>
+          native.stream(config, {
+            messages: question,
+            fetchImpl: async () =>
+              streamResponse([delta, completed([{ ...answer(), content }])]),
+          }),
+        "protocol",
+      );
+    }
+    const result = await native.stream(config, {
+      messages: question,
+      fetchImpl: async () =>
+        streamResponse([
+          delta,
+          { type: "response.completed", response: { status: "completed" } },
+        ]),
+    });
+    assert.equal(result.text, "Part");
+  });
+
   it("requires a completed response, not EOF, DONE, or a text-done event", async function () {
     for (const raw of [
       'data: {"type":"response.output_text.delta","delta":"Partial"}\n\n',
@@ -633,6 +705,25 @@ describe("AskGPT provider-native search", function () {
     });
     assert.equal(result.text, "Answer");
     assert.isTrue(cancelled);
+  });
+
+  it("keeps the completed response when its final delta is repeated after it in the same read", async function () {
+    const lateDelta = {
+      type: "response.output_text.delta",
+      item_id: "msg-1",
+      delta: "Answer",
+    };
+    for (const split of [undefined, 1]) {
+      const deltas: string[] = [];
+      const result = await native.stream(config, {
+        messages: question,
+        fetchImpl: async () =>
+          streamResponse([completed(), lateDelta], { split }),
+        onDelta: (delta: string) => deltas.push(delta),
+      });
+      assert.equal(result.text, "Answer");
+      assert.deepEqual(deltas, ["Answer"]);
+    }
   });
 
   it("cancels before dispatch and while a reader is stalled", async function () {

@@ -1,4 +1,5 @@
 import { assert } from "chai";
+import { attachToReader, unregisterReader } from "../src/modules/reader";
 import {
   createReaderToolbar,
   readerHostWindow,
@@ -36,6 +37,83 @@ describe("AskGPT reader toolbar", function () {
       listeners,
     } as any;
   }
+
+  it("binds only the current reader views after initialization, split and PDF reload", async function () {
+    const window = host();
+    const outer = document(false);
+    function viewDocument() {
+      const doc = document(false);
+      Object.defineProperty(doc, "documentURI", {
+        value: "resource://zotero/reader/pdf/web/viewer.html",
+      });
+      const add = doc.addEventListener.bind(doc);
+      let keys = 0;
+      Object.defineProperty(doc, "addEventListener", {
+        value(type: string, listener: EventListener, capture: boolean) {
+          if (type === "keydown") keys++;
+          add(type, listener, capture);
+        },
+      });
+      return { doc, keys: () => keys };
+    }
+    const primary = viewDocument();
+    const secondary = viewDocument();
+    const replacement = viewDocument();
+    const unrelated = viewDocument();
+    let initialized!: () => void;
+    const reader: any = {
+      _window: window,
+      _initPromise: new Promise<void>((resolve) => {
+        initialized = resolve;
+      }),
+    };
+    attachToReader(reader);
+    const views: any = {
+      _primaryView: { _iframe: { contentDocument: primary.doc } },
+    };
+    reader._iframeWindow = { document: outer };
+    reader._internalReader = views;
+    initialized();
+    await Promise.resolve();
+    function viewerReady() {
+      const event = outer.createEvent("CustomEvent");
+      event.initCustomEvent("webviewerloaded", true, false, {
+        source: { document: unrelated.doc },
+      });
+      outer.dispatchEvent(event);
+    }
+    assert.equal(primary.keys(), 1);
+    views._secondaryView = { _iframe: { contentDocument: secondary.doc } };
+    viewerReady();
+    views._primaryView = { _iframe: { contentDocument: replacement.doc } };
+    viewerReady();
+    assert.equal(primary.keys(), 1);
+    assert.equal(secondary.keys(), 1);
+    assert.equal(replacement.keys(), 1);
+    assert.equal(unrelated.keys(), 0);
+    unregisterReader(window as unknown as Window);
+    views._primaryView = { _iframe: { contentDocument: unrelated.doc } };
+    viewerReady();
+    assert.equal(
+      unrelated.keys(),
+      0,
+      "A disposed reader must ignore new view signals",
+    );
+    delete reader._internalReader;
+    reader._initPromise = new Promise<void>((resolve) => {
+      initialized = resolve;
+    });
+    attachToReader(reader);
+    unregisterReader(window as unknown as Window);
+    reader._internalReader = views;
+    initialized();
+    await Promise.resolve();
+    assert.equal(
+      unrelated.keys(),
+      0,
+      "Unloading must cancel pending initialization",
+    );
+  });
 
   function event(doc: Document, type: string, values = {}) {
     const result = doc.createEvent("Event");

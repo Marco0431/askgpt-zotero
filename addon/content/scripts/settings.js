@@ -3,8 +3,60 @@
 (function () {
   "use strict";
   const prefix = "extensions.askgpt.";
+  const fieldBindings = new WeakMap();
 
-  function saveConnection(prefs, { baseURL, model, apiKey, temperature }) {
+  // A loaded or retyped credential belongs to the origin shown at that time.
+  function bindProviderKey(base, key) {
+    let binding = fieldBindings.get(key);
+    if (!binding) {
+      const origin = () => window.AskGPTClient.providerOrigin(base.value);
+      let boundOrigin;
+      let boundValue;
+      function capture() {
+        boundOrigin = origin();
+        boundValue = key.value;
+      }
+      function read() {
+        const current = origin();
+        if (!current) return "";
+        if (current !== boundOrigin && key.value === boundValue) key.value = "";
+        boundOrigin = current;
+        boundValue = key.value;
+        return key.value;
+      }
+      key.addEventListener("input", capture);
+      base.addEventListener("change", read);
+      binding = { capture, read };
+      fieldBindings.set(key, binding);
+    }
+    binding.capture();
+    return binding.read;
+  }
+
+  // Keep this snapshot in its owning form only. It includes a credential.
+  function snapshot(prefs) {
+    const get = (key) => prefs.get(prefix + key);
+    return JSON.stringify([
+      get("baseURL") || "https://api.deepseek.com",
+      get("apiKey") || "",
+      get("model") || "deepseek-chat",
+      String(get("temperature") ?? 0.3),
+      get("nativeSearch") === true,
+      get("language") || "auto",
+      get("systemPrompt") || "",
+    ]);
+  }
+
+  function saveConnection(
+    prefs,
+    { baseURL, model, apiKey, temperature },
+    expected,
+  ) {
+    if (expected !== snapshot(prefs)) {
+      const error = new Error("Settings changed in another window.");
+      error.name = "StaleAskGPTSettings";
+      throw error;
+    }
     const number = Number.parseFloat(temperature);
     const values = {
       baseURL,
@@ -42,5 +94,5 @@
     }
   }
 
-  window.AskGPTSettings = { saveConnection };
+  window.AskGPTSettings = { snapshot, saveConnection, bindProviderKey };
 })();

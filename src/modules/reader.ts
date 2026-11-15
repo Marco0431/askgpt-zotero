@@ -19,7 +19,7 @@ let toolbar: ReturnType<typeof createReaderToolbar> | undefined;
 
 const onTextSelection = (event: any) => {
   try {
-    if (event.reader) attachToReader(event.reader, 2);
+    if (event.reader) attachToReader(event.reader);
     if (event.doc) attachToReaderDoc(event.doc, event.reader);
     const text = event.params?.annotation?.text;
     if (typeof text === "string" && text.trim())
@@ -45,7 +45,7 @@ export function registerReader() {
 const onRenderToolbar = (event: any) => {
   try {
     toolbar?.attach(event);
-    if (event.reader) attachToReader(event.reader, 2);
+    if (event.reader) attachToReader(event.reader);
   } catch (error) {
     Zotero.logError(error instanceof Error ? error : new Error(String(error)));
   }
@@ -77,7 +77,7 @@ export function registerToolbar() {
         readers.forEach((reader: any) => {
           if (reader) {
             toolbar?.attach({ reader });
-            attachToReader(reader, 4);
+            attachToReader(reader);
           }
         });
       }
@@ -143,25 +143,32 @@ export function unregisterContextMenu(win: Window) {
 }
 
 /**
- * 把 Ctrl+K 监听挂到 reader iframe 文档（带重试）。
- * 同时监听 selectionchange：选中变化时防抖更新 addon.data.readerSelection，
- * 并主动推送给已打开的弹窗（事件驱动，弹窗不再轮询）。
+ * 把 Ctrl+K 监听挂到 reader iframe 文档。
+ * 同时监听 selectionchange，防抖后将当前阅读器的选区通知面板。
  */
 interface ReaderDocumentBinding {
   reader: any;
   dispose: () => void;
 }
 const readerDocuments = new Map<Document, ReaderDocumentBinding>();
-const readerRetries = new Map<any, ReturnType<typeof setTimeout>>();
+const pendingReaders = new Map<any, symbol>();
 const menuRetries = new Map<Window, ReturnType<typeof setTimeout>>();
 
 function cacheSelection(text: string, reader: any) {
   const itemID = reader?.itemID ?? reader?._item?.id;
   if (!reader || itemID === undefined) return;
-  addon.data.readerSelection = text;
-  addon.data.readerSelectionItemID = itemID;
   const host = readerHostWindow(reader);
   if (host) updateAskPopupSelection(host, reader, text);
+}
+
+function attachViewDocuments(reader: any, loadedFrame?: EventTarget | null) {
+  const internal = reader?._internalReader;
+  for (const view of [internal?._primaryView, internal?._secondaryView]) {
+    if (!view || (loadedFrame && loadedFrame !== view._iframe)) continue;
+    const doc = view._iframe?.contentDocument || view._iframeWindow?.document;
+    if (doc && doc.documentURI !== "about:blank")
+      attachToReaderDoc(doc, reader);
+  }
 }
 
 export function attachToReaderDoc(doc: Document, reader?: any): boolean {
@@ -176,6 +183,14 @@ export function attachToReaderDoc(doc: Document, reader?: any): boolean {
     let removed = false;
     const onKey = (event: KeyboardEvent) =>
       onKeyDown(event, binding.reader, doc);
+    const isReaderDocument = reader && reader._iframeWindow?.document === doc;
+    // PDF.js signals its parent document when the viewer starts. Split and
+    // reloaded views send the same signal with a new underlying document.
+    const onViewerReady = () => attachViewDocuments(binding.reader);
+    const onFrameLoad = (event: Event) => {
+      if ((event.target as Element)?.localName === "iframe")
+        attachViewDocuments(binding.reader, event.target);
+    };
     const onSelection = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
@@ -193,6 +208,9 @@ export function attachToReaderDoc(doc: Document, reader?: any): boolean {
       if (timer) clearTimeout(timer);
       doc.removeEventListener("keydown", onKey, true);
       doc.removeEventListener("selectionchange", onSelection, true);
+      doc.removeEventListener("webviewerloaded", onViewerReady);
+      doc.removeEventListener("load", onFrameLoad, true);
+      if (isReaderDocument) pendingReaders.delete(binding.reader);
       doc.defaultView?.removeEventListener("pagehide", dispose);
       readerDocuments.delete(doc);
     };
@@ -200,6 +218,10 @@ export function attachToReaderDoc(doc: Document, reader?: any): boolean {
     readerDocuments.set(doc, binding);
     doc.addEventListener("keydown", onKey, true);
     doc.addEventListener("selectionchange", onSelection, true);
+    if (isReaderDocument) {
+      doc.addEventListener("webviewerloaded", onViewerReady);
+      doc.addEventListener("load", onFrameLoad, true);
+    }
     doc.defaultView?.addEventListener("pagehide", dispose);
     return true;
   } catch (e) {
@@ -207,32 +229,34 @@ export function attachToReaderDoc(doc: Document, reader?: any): boolean {
   }
 }
 
-export function attachToReader(reader: any, maxRetries?: number) {
+export function attachToReader(reader: any) {
   if (!reader) return;
-  const previous = readerRetries.get(reader);
-  if (previous) clearTimeout(previous);
-  readerRetries.delete(reader);
-  const retries = Math.max(1, maxRetries || 4);
-  let attempt = 0;
-  const tryOnce = () => {
-    readerRetries.delete(reader);
-    attempt++;
-    try {
-      if (reader._isTabClosed || reader._window?.closed) return;
-      const documents = [
-        reader._iframeWindow?.document,
-        reader._internalReader?._primaryView?._iframeWindow?.document,
-        reader._internalReader?._secondaryView?._iframeWindow?.document,
-      ].filter(Boolean);
-      for (const doc of documents) attachToReaderDoc(doc, reader);
-      toolbar?.attach({ reader });
-      if (documents.length && reader._internalReader) return;
-    } catch (e) {}
-    if (attempt < retries) {
-      readerRetries.set(reader, setTimeout(tryOnce, 400 + attempt * 300));
-    }
-  };
-  tryOnce();
+  try {
+    if (reader._isTabClosed || reader._window?.closed) return;
+    const doc = reader._iframeWindow?.document;
+    if (doc) attachToReaderDoc(doc, reader);
+    attachViewDocuments(reader);
+    toolbar?.attach({ reader });
+    if (
+      reader._internalReader ||
+      !reader._initPromise ||
+      pendingReaders.has(reader)
+    )
+      return;
+    const token = Symbol();
+    pendingReaders.set(reader, token);
+    void reader._initPromise.then(
+      () => {
+        if (pendingReaders.get(reader) !== token) return;
+        pendingReaders.delete(reader);
+        // Zotero resolves _initPromise after creating its internal reader.
+        if (reader._internalReader) attachToReader(reader);
+      },
+      () => {
+        if (pendingReaders.get(reader) === token) pendingReaders.delete(reader);
+      },
+    );
+  } catch (e) {}
 }
 
 function onKeyDown(ev: KeyboardEvent, reader?: any, doc?: Document) {
@@ -262,12 +286,8 @@ export function unregisterReader(win?: Window) {
     if (!win || readerHostWindow(binding.reader, doc) === win)
       binding.dispose();
   }
-  for (const [reader, timer] of readerRetries) {
-    if (!win || readerHostWindow(reader) === win) {
-      clearTimeout(timer);
-      readerRetries.delete(reader);
-    }
-  }
+  for (const reader of pendingReaders.keys())
+    if (!win || readerHostWindow(reader) === win) pendingReaders.delete(reader);
   for (const [window, timer] of menuRetries) {
     if (!win || window === win) {
       clearTimeout(timer);
@@ -298,17 +318,25 @@ export function registerNotifier() {
     addon.data.notifierID = Zotero.Notifier.registerObserver(
       {
         notify: (event: string, type: string, ids: Array<string | number>) => {
-          if (type === "reader" || type === "tab") {
+          if (type !== "tab") return;
+          if (event === "close") {
+            for (const reader of pendingReaders.keys())
+              if (ids.includes(reader.tabID)) pendingReaders.delete(reader);
+          } else if (
+            event === "add" ||
+            event === "select" ||
+            event === "load"
+          ) {
             for (const tabID of ids || []) {
               try {
                 const reader = Zotero.Reader.getByTabID(tabID as string);
-                if (reader) attachToReader(reader, 4);
+                if (reader) attachToReader(reader);
               } catch (e) {}
             }
           }
         },
       },
-      ["reader", "tab"] as unknown as _ZoteroTypes.Notifier.Type[],
+      ["tab"],
     );
   } catch (e) {
     Zotero.logError(new Error("AskGPT registerNotifier: " + e));

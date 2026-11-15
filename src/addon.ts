@@ -9,8 +9,6 @@ class Addon {
     env: "development" | "production";
     initialized?: boolean;
     // AskGPT 扩展状态
-    readerSelection?: string;
-    readerSelectionItemID?: number | string;
     notifierID?: string;
   };
   // Lifecycle hooks

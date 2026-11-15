@@ -89,7 +89,7 @@ A returned model list does not guarantee that every model supports chat, images,
 
 You can also edit the core API fields under **Zotero → Settings → AskGPT**. Model discovery and connection testing are available in the reader panel. Local compatible services that require no authentication can leave the API key empty.
 
-The toolbar button shows **AskGPT** and toggles the panel; `Ctrl+K` / `Cmd+K` opens or focuses it. Opening from a separate reader window uses that reader’s paper and window.
+The **AskGPT** toolbar button toggles the panel. Press `Ctrl+K` / `Cmd+K` to open it or return to the question box. If the panel is already open in another Zotero window, either control brings it to the front. Close it first to open a panel in the other window.
 
 ## Provider web search
 

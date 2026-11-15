@@ -246,6 +246,11 @@
     ["image.button", "＋ 图片", "＋ Image"],
     ["image.remove", "移除图片 {name}", "Remove image {name}"],
     ["image.sent", "已发送图片", "Sent image"],
+    [
+      "image.openRemote",
+      "在浏览器中打开图片：{name}",
+      "Open image in browser: {name}",
+    ],
     ["image.loadRemote", "加载外部图片：{name}", "Load external image: {name}"],
     [
       "input.placeholder",
@@ -256,8 +261,18 @@
     ["chat.stop", "停止", "Stop"],
     ["chat.send", "发送", "Send"],
     ["chat.sending", "发送中…", "Sending…"],
+    [
+      "chat.sendingElsewhere",
+      "另一窗口正在回答这篇文献的问题。请等回答结束后再发送。",
+      "Another window is answering a question on this paper. Send after that reply finishes.",
+    ],
     ["chat.focusTag", "含选中段落", "Includes selected passage"],
     ["settings.saved", "设置已保存。", "Settings saved."],
+    [
+      "settings.changedElsewhere",
+      "设置已在其他窗口更改。请重新打开 AskGPT 设置，确认当前配置。",
+      "Settings changed in another window. Reopen AskGPT settings to review the current values.",
+    ],
     [
       "model.required",
       "请选择模型，或手动输入模型 ID。",
@@ -392,6 +407,21 @@
       "原生搜索已验证 · {model}。服务商已实际执行搜索；勾选“原生联网搜索”并保存后启用。",
       "Native search verified · {model}. The provider performed a search. Enable Native web search and save to use it.",
     ],
+    [
+      "chat.incomplete",
+      "回答未完整接收，请重试或缩短问题。",
+      "The answer was incomplete. Retry or shorten the question.",
+    ],
+    [
+      "chat.invalidStream",
+      "接口返回的流数据格式不正确。",
+      "The API returned an invalid response stream.",
+    ],
+    [
+      "chat.providerFailed",
+      "服务商报告生成失败，请重试或检查接口设置。",
+      "The provider reported a generation error. Retry or check your API settings.",
+    ],
     ["chat.stopped", "已停止。", "Stopped."],
     [
       "error.chat",
@@ -412,6 +442,16 @@
       "✓ Saved as a Zotero note under: {title}",
     ],
     ["note.saved", "✓ 已保存为独立笔记", "✓ Saved as a standalone note"],
+    [
+      "note.readOnly",
+      "此文库为只读，无法保存笔记。",
+      "This library is read-only. The note could not be saved.",
+    ],
+    [
+      "note.sourceUnavailable",
+      "原文献已不可用，未保存笔记。",
+      "The source item is no longer available. The note was not saved.",
+    ],
     ["note.error", "保存失败：{message}", "Could not save: {message}"],
     [
       "render.missing",

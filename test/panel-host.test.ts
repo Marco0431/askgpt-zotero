@@ -33,10 +33,14 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       const selections: string[] = [];
       let frameDocumentURI = "chrome://askgpt/content/popup.xhtml";
       let cancellations = 0;
+      let focuses = 0;
       const win: any = {
         document: doc,
         innerWidth: 1200,
         innerHeight: 900,
+        focus() {
+          focuses++;
+        },
         getSelection: () => ({ toString: () => "" }),
         addEventListener(type: string, listener: (value: any) => void) {
           if (!listeners.has(type)) listeners.set(type, new Set());
@@ -120,6 +124,7 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
         doc,
         refreshes,
         selections,
+        focuses: () => focuses,
         setFrameDocumentURI: (uri: string) => {
           frameDocumentURI = uri;
         },
@@ -162,6 +167,7 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       });
       const reader = (itemID: number, host = first) => ({
         itemID,
+        _item: { id: itemID, libraryID: 1, getField: () => "" },
         _window: host.win,
         _iframeWindow: {
           getSelection: () => ({ toString: () => `selection-${itemID}` }),
@@ -174,6 +180,8 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
         reads[index].resolve({
           text,
           path: `/${reads[index].reader.itemID}.pdf`,
+          attachmentID: reads[index].reader.itemID,
+          libraryID: reads[index].reader._item.libraryID,
           label: "PDF",
           chars: text.length,
           title: text,
@@ -238,6 +246,60 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       assert.lengthOf(ui.errors, 0);
     });
 
+    it("takes the selection from the last active split view", async function () {
+      const ui = harness();
+      const reader = ui.reader(5);
+      const view = (text: string) => ({
+        _iframeWindow: { getSelection: () => text },
+      });
+      const secondary = view("selected in the right pane");
+      Object.assign(reader, {
+        _internalReader: {
+          _primaryView: view("older selection in the left pane"),
+          _secondaryView: secondary,
+          _lastView: secondary,
+        },
+      });
+      const open = ui.api.openAskPopup({ reader });
+      await tick();
+      ui.resolve(0);
+      await open;
+      assert.equal(
+        ui.first.win.__askgptPopupState.selection,
+        "selected in the right pane",
+      );
+      ui.api.disposeAskPopup();
+    });
+
+    it("remembers a collapsed selection only in its own reader window", async function () {
+      const ui = harness();
+      const other = makeHost();
+      const first = ui.reader(5);
+      const second = ui.reader(5, other);
+      for (const reader of [first, second])
+        reader._iframeWindow.getSelection = () => ({ toString: () => "" });
+      ui.api.updateAskPopupSelection(
+        ui.first.win,
+        first,
+        "first window selection",
+      );
+      const one = ui.api.openAskPopup({ reader: first });
+      await tick();
+      ui.resolve(0);
+      await one;
+      assert.equal(
+        ui.first.win.__askgptPopupState.selection,
+        "first window selection",
+      );
+      ui.api.hideAskPopup({ window: ui.first.win });
+      const two = ui.api.openAskPopup({ reader: second });
+      await tick();
+      ui.resolve(1);
+      await two;
+      assert.equal(other.win.__askgptPopupState.selection, "");
+      ui.api.disposeAskPopup();
+    });
+
     it("delivers paper state only to the loaded AskGPT panel document", async function () {
       const ui = harness();
       const reader = ui.reader(1);
@@ -261,6 +323,35 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       ui.api.disposeAskPopup();
     });
 
+    it("separates paper sessions for different library items linked to the same file", async function () {
+      const ui = harness();
+      const keys = [];
+      for (const id of [11, 22]) {
+        const reader = ui.reader(id);
+        reader._item.libraryID = id;
+        const open = ui.api.openAskPopup({ reader });
+        await tick();
+        ui.reads.at(-1)!.resolve({
+          text: "shared document",
+          path: "/linked.pdf",
+          label: "PDF",
+          attachmentID: id,
+          libraryID: id,
+          chars: 15,
+          title: "test",
+          truncated: false,
+        });
+        await open;
+        const session = ui.first.win.__askgptPopupState.session;
+        assert.deepEqual(session.noteTarget, { itemID: id, libraryID: id });
+        assert.isEmpty(session.history);
+        session.history.push({ role: "user", content: "private to this item" });
+        keys.push(session.key);
+      }
+      assert.notEqual(keys[0], keys[1]);
+      ui.api.disposeAskPopup();
+    });
+
     it("does not let an older paper read replace the newer reader", async function () {
       const ui = harness();
       const old = ui.api.openAskPopup({ reader: ui.reader(1) });
@@ -280,7 +371,9 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       assert.equal(ui.first.win.__askgptPopupState.selection, "selection-2");
       assert.equal(ui.api.getAskPopupState(ui.first.win).reader, currentReader);
       assert.equal(ui.first.refreshes.length, refreshCount);
-      assert.notProperty(ui.addon.data.sessions, "file:/1.pdf");
+      assert.deepEqual(Object.keys(ui.addon.data.sessions), [
+        ui.first.win.__askgptPopupState.session.key,
+      ]);
       ui.api.disposeAskPopup();
     });
 
@@ -321,32 +414,55 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       );
       assert.equal(ui.first.refreshes.length, refreshCount);
       assert.strictEqual(ui.first.win.__askgptPopupState, published);
-      assert.notProperty(ui.addon.data.sessions, "file:/1.pdf");
+      assert.isEmpty(ui.addon.data.sessions);
       assert.isAtLeast(ui.first.cancellations(), 2);
       ui.api.disposeAskPopup();
     });
 
-    it("keeps independent reader-window state separate", async function () {
+    it("reuses the visible panel even during loading, and moves ownership only after hiding", async function () {
       const ui = harness();
       const second = makeHost();
+      const third = makeHost();
+      Object.assign(ui.first.win, {
+        STATE_MINIMIZED: 2,
+        windowState: 2,
+        restore() {
+          ui.first.win.windowState = 3;
+        },
+      });
       const one = ui.api.openAskPopup({ reader: ui.reader(1) });
-      const two = ui.api.openAskPopup({ reader: ui.reader(2, second) });
+      const anotherReader = ui.reader(2, second);
+      const two = ui.api.toggleAskPopup({ reader: anotherReader });
+      const three = ui.api.openAskPopup({ reader: ui.reader(3, third) });
       await tick();
+      assert.lengthOf(ui.reads, 1);
       ui.resolve(0, "FIRST_WINDOW_PAPER");
-      ui.resolve(1, "SECOND_WINDOW_PAPER");
-      await Promise.all([one, two]);
+      await Promise.all([one, two, three]);
+      assert.equal(ui.first.focuses(), 2);
+      assert.equal(
+        ui.first.win.windowState,
+        3,
+        "The owner should be visible again",
+      );
+      assert.isNull(second.doc.getElementById("askgpt-panel-frame"));
+      assert.isNull(third.doc.getElementById("askgpt-panel-frame"));
       assert.equal(
         ui.first.win.__askgptPopupState.contextText,
         "FIRST_WINDOW_PAPER",
       );
+      ui.api.disposeAskPopup(third.win);
+      assert.isTrue(ui.api.getAskPopupState(ui.first.win).visible);
+      ui.api.hideAskPopup({ window: ui.first.win });
+      const reopened = ui.api.openAskPopup({ reader: anotherReader });
+      await tick();
+      ui.resolve(1, "SECOND_WINDOW_PAPER");
+      await reopened;
+      assert.isNull(ui.first.doc.getElementById("askgpt-panel-frame"));
       assert.equal(
         second.win.__askgptPopupState.contextText,
         "SECOND_WINDOW_PAPER",
       );
-      ui.api.hideAskPopup({ window: second.win });
-      assert.isTrue(ui.api.getAskPopupState(ui.first.win).visible);
-      assert.isFalse(ui.api.getAskPopupState(second.win).visible);
-      assert.equal(ui.first.refreshes.at(-1).contextText, "FIRST_WINDOW_PAPER");
+      assert.isTrue(ui.api.getAskPopupState(second.win).visible);
       ui.api.disposeAskPopup();
     });
 
@@ -409,7 +525,7 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       ui.resolve(0);
       await pending;
       assert.notProperty(ui.first.win, "__askgptPopupState");
-      assert.notProperty(ui.addon.data.sessions, "file:/1.pdf");
+      assert.isEmpty(ui.addon.data.sessions);
     });
   });
 }

@@ -118,8 +118,11 @@
     return (
       String(value == null ? "" : value)
         // Strip pasted header/URL control characters deliberately.
-        // eslint-disable-next-line no-control-regex
-        .replace(/[\u0000-\u0020\u007f\u200b-\u200d\ufeff]/g, "")
+        .replace(
+          // eslint-disable-next-line no-control-regex
+          /[\u0000-\u0020\u007f-\u009f\u00a0\u200b-\u200f\u2028\u2029\u2060\ufeff]/g,
+          "",
+        )
         .trim()
     );
   }
@@ -212,6 +215,28 @@
         .replace(/[\u0000-\u001f\u007f]/g, " ")
         .slice(0, 320)
     );
+  }
+
+  function createSSELineReader(onLine) {
+    let pending = "";
+    let endedWithCR = false;
+    return (chunk, done = false) => {
+      if (chunk) {
+        // A CR ends the line immediately. Its optional LF can arrive in a later read.
+        if (endedWithCR && chunk.startsWith("\n")) chunk = chunk.slice(1);
+        endedWithCR = chunk.endsWith("\r");
+        const lines = chunk.split(/\r\n|[\r\n]/);
+        pending += lines[0];
+        for (let i = 1; i < lines.length; i++) {
+          onLine(pending);
+          pending = lines[i];
+        }
+      }
+      if (done && pending) {
+        onLine(pending);
+        pending = "";
+      }
+    };
   }
 
   function httpError(status, data) {
@@ -425,6 +450,15 @@
 
   window.AskGPTClient = Object.freeze({
     buildEndpoint,
+    cleanConnectionValue: clean,
+    providerOrigin(base) {
+      try {
+        return new URL(buildEndpoint(base)).origin;
+      } catch {
+        return null;
+      }
+    },
+    createSSELineReader,
     fetchModels,
     testConnection,
     httpError,

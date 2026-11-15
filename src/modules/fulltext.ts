@@ -21,6 +21,8 @@ export type FullTextContext = {
   label: string;
   /** 文件路径（作为会话 key） */
   path: string;
+  attachmentID: number;
+  libraryID: number;
   /** 字符数 */
   chars: number;
   /** 是否因超长被截断 */
@@ -44,7 +46,9 @@ type CacheEntry = {
   ttl: number;
 };
 const fulltextCache = new Map<string, CacheEntry>();
-const pendingReads = new Map<string, Promise<FullTextContext | null>>();
+// undefined means the source changed during this single read.
+type RevisionResult = FullTextContext | null | undefined;
+const pendingReads = new Map<string, Promise<RevisionResult>>();
 let cacheGeneration = 0;
 
 export function clearFullTextCache() {
@@ -53,7 +57,11 @@ export function clearFullTextCache() {
   pendingReads.clear();
 }
 
-export type ContextOptions = { reader?: any; window?: Window };
+export type ContextOptions = {
+  reader?: any;
+  window?: Window;
+  selectedItem?: any;
+};
 
 function isAttachment(item: any): boolean {
   try {
@@ -77,16 +85,6 @@ type Cand = {
   rank: number;
   /** 说明性标签 */
   label: string;
-};
-
-const EXT_SCORE: { [ext: string]: number } = {
-  md: 0,
-  markdown: 1,
-  html: 2,
-  htm: 3,
-  pdf: 4,
-  txt: 5,
-  text: 6,
 };
 
 const EXT_LABEL: { [ext: string]: string } = {
@@ -158,14 +156,13 @@ function toCandidate(item: any, rank: number): Cand | null {
     const p: string | null = item.getFilePath();
     if (!p) return null;
     const ext = (p.split(".").pop() || "").toLowerCase();
-    const score = EXT_SCORE[ext];
-    if (score === undefined) return null;
+    if (!Object.prototype.hasOwnProperty.call(EXT_LABEL, ext)) return null;
     return {
       item,
       path: p,
       ext,
       rank,
-      label: EXT_LABEL[ext] || ext.toUpperCase(),
+      label: EXT_LABEL[ext],
     };
   } catch (e) {
     return null;
@@ -183,7 +180,10 @@ function collectCandidates(options: ContextOptions = {}): Cand[] {
       const pane = options.window
         ? (options.window as any).ZoteroPane
         : Zotero.getActiveZoteroPane();
-      selected = pane?.getSelectedItems?.()?.[0] || null;
+      selected =
+        "selectedItem" in options
+          ? options.selectedItem
+          : pane?.getSelectedItems?.()?.[0] || null;
     } catch {
       return [];
     }
@@ -193,7 +193,7 @@ function collectCandidates(options: ContextOptions = {}): Cand[] {
   const parent = attached ? selected.parentItem : selected;
   const items: any[] = attached ? [selected] : [];
   try {
-    for (const id of (parent?.getAttachments?.() || []).slice(0, 30)) {
+    for (const id of parent?.getAttachments?.() || []) {
       const child = Zotero.Items.get(id);
       if (isAttachment(child)) items.push(child);
     }
@@ -355,12 +355,14 @@ function truncateText(
   max: number,
 ): { text: string; truncated: boolean } {
   if (text.length <= max) return { text, truncated: false };
-  let cut = text.lastIndexOf("\n\n", max);
-  if (cut < max * 0.6) cut = max;
+  const notice = `\n\n…（全文过长，已截断；原文共 ${text.length} 字）`;
+  const available = Math.max(0, max - notice.length);
+  let cut = text.lastIndexOf("\n\n", available);
+  if (cut < available * 0.6) cut = available;
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut--;
   return {
-    text:
-      text.slice(0, cut) +
-      `\n\n…（全文过长，已截断；原文共 ${text.length} 字）`,
+    text: text.slice(0, cut) + notice.slice(0, max),
     truncated: true,
   };
 }
@@ -379,12 +381,13 @@ function cacheResult(key: string, entry: CacheEntry) {
     fulltextCache.delete(fulltextCache.keys().next().value!);
 }
 
-async function readCachedCandidate(
+async function readCandidateRevision(
   cand: Cand,
-  attempt = 0,
-): Promise<FullTextContext | null> {
-  const generation = cacheGeneration;
+  generation: number,
+): Promise<RevisionResult> {
+  if (generation !== cacheGeneration) return null;
   const fingerprint = await candidateFingerprint(cand);
+  if (generation !== cacheGeneration) return null;
   const key = JSON.stringify([cand.item.libraryID, cand.item.id, cand.path]);
   const cached = fulltextCache.get(key);
   if (
@@ -399,31 +402,45 @@ async function readCachedCandidate(
       : null;
   }
   const pendingKey = JSON.stringify([key, fingerprint, generation]);
-  const existing = pendingReads.get(pendingKey);
-  if (existing) {
-    const context = await existing;
-    return context ? { ...context, title: getContextTitle(cand.item) } : null;
+  let pending = pendingReads.get(pendingKey);
+  if (!pending) {
+    pending = read();
+    pendingReads.set(pendingKey, pending);
   }
-  const pending = (async () => {
+  try {
+    const context = await pending;
+    if (generation !== cacheGeneration) return null;
+    return context
+      ? { ...context, title: getContextTitle(cand.item) }
+      : context;
+  } finally {
+    if (pendingReads.get(pendingKey) === pending)
+      pendingReads.delete(pendingKey);
+  }
+
+  async function read(): Promise<RevisionResult> {
     const got =
       fingerprint === "missing" ? null : await readCandidateText(cand);
+    if (generation !== cacheGeneration) return null;
     const after = await candidateFingerprint(cand);
-    // A file changed during extraction: never publish or cache the older read.
-    if (fingerprint !== null && fingerprint !== after)
-      return attempt === 0 ? readCachedCandidate(cand, 1) : null;
+    if (generation !== cacheGeneration) return null;
+    if (fingerprint !== null && fingerprint !== after) return undefined;
     let context: FullTextContext | null = null;
-    if (got?.text.trim()) {
-      const result = truncateText(got.text.trim(), MAX_CHARS);
+    const text = got?.text.trim();
+    if (text) {
+      const result = truncateText(text, MAX_CHARS);
       context = {
         text: result.text,
         label: cand.label,
         path: cand.path,
+        attachmentID: cand.item.id,
+        libraryID: cand.item.libraryID,
         chars: result.text.length,
-        truncated: result.truncated || !!got.partial,
+        truncated: result.truncated || !!got?.partial,
         title: getContextTitle(cand.item),
       };
     }
-    if (fingerprint !== null && generation === cacheGeneration)
+    if (fingerprint !== null)
       cacheResult(key, {
         context,
         fingerprint,
@@ -431,30 +448,32 @@ async function readCachedCandidate(
         ttl: context && !got?.partial ? CACHE_TTL : NEGATIVE_CACHE_TTL,
       });
     return context;
-  })();
-  pendingReads.set(pendingKey, pending);
-  try {
-    const context = await pending;
-    return context ? { ...context } : null;
-  } finally {
-    if (pendingReads.get(pendingKey) === pending)
-      pendingReads.delete(pendingKey);
   }
+}
+
+async function readCachedCandidate(cand: Cand, generation: number) {
+  const context = await readCandidateRevision(cand, generation);
+  // Release the old revision's in-flight entry before joining another revision.
+  if (context === undefined)
+    return (await readCandidateRevision(cand, generation)) ?? null;
+  return context;
 }
 
 export async function readAttachmentContext(
   options: ContextOptions = {},
 ): Promise<FullTextContext | null> {
   // Snapshot the owning reader, item, and source preference before the first await.
+  const generation = cacheGeneration;
   const candidates = collectCandidates(options);
   for (const candidate of candidates) {
+    if (generation !== cacheGeneration) return null;
     try {
       const actual = await resolveCandidate(candidate);
-      const context = await readCachedCandidate(actual);
+      const context = await readCachedCandidate(actual, generation);
       if (context) return context;
       // An empty Markdown sidecar must not hide readable HTML content.
       if (actual.path !== candidate.path) {
-        const fallback = await readCachedCandidate(candidate);
+        const fallback = await readCachedCandidate(candidate, generation);
         if (fallback) return fallback;
       }
     } catch (error) {
