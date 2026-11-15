@@ -246,6 +246,7 @@
     ["image.button", "＋ 图片", "＋ Image"],
     ["image.remove", "移除图片 {name}", "Remove image {name}"],
     ["image.sent", "已发送图片", "Sent image"],
+    ["image.loadRemote", "加载外部图片：{name}", "Load external image: {name}"],
     [
       "input.placeholder",
       "输入问题，或粘贴截图…",

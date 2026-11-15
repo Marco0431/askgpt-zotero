@@ -2,7 +2,7 @@
  * AskGPT 弹窗逻辑 —— 轻量 agent：
  *   - 轻量级 system prompt（参考开源 agent 通用写法：角色 + 能力边界 + 工具规则 + 输出约束）
  *   - Native web search through the configured provider's Responses API
- *   - OpenAI 兼容 chat/completions，流式输出，function calling
+ *   - OpenAI 兼容 chat/completions，流式输出
  *   - 全部设置存在 Zotero.Prefs，纯本地
  */
 (function () {
@@ -461,9 +461,6 @@
     const cleanBase = stripInvisible(rawBase);
     const cleanKey = stripInvisible(rawKey);
     const cleanModel = stripInvisible(rawModel);
-    if (cleanBase !== rawBase) setPref("baseURL", cleanBase);
-    if (cleanKey !== rawKey) setPref("apiKey", cleanKey);
-    if (cleanModel !== rawModel) setPref("model", cleanModel);
     el.setBase.value = cleanBase;
     el.setKey.value = cleanKey;
     el.setModel.value = cleanModel;
@@ -508,6 +505,10 @@
       if (!stripInvisible(el.setModel.value).trim()) {
         throw new Error(t("model.required"));
       }
+      window.AskGPTSettings.saveConnection(Zotero.Prefs, {
+        ...connectionConfig(),
+        temperature: el.setTemp.value,
+      });
     } catch (error) {
       el.saveStatus.textContent = client.safeErrorMessage(
         error,
@@ -515,11 +516,6 @@
       );
       return;
     }
-    const config = connectionConfig();
-    setPref("baseURL", config.baseURL);
-    setPref("apiKey", config.apiKey);
-    setPref("model", config.model);
-    setPref("temperature", clampNum(el.setTemp.value, 0, 2, 0.3));
     setPref("systemPrompt", el.setSys.value);
     setPref("language", i18n.language());
     try {
@@ -749,7 +745,6 @@
         window.frameElement?.ownerDocument?.defaultView ||
         window.frameElement?.ownerGlobal ||
         window.opener ||
-        Zotero?.getMainWindow?.() ||
         null
       );
     } catch {
@@ -765,13 +760,7 @@
       ) {
         return host.__askgptPopupState;
       }
-      return (
-        (Zotero &&
-          Zotero.AskGPT &&
-          Zotero.AskGPT.data &&
-          Zotero.AskGPT.data.popupState) ||
-        null
-      );
+      return null;
     } catch (e) {
       return null;
     }
@@ -950,7 +939,8 @@
       try {
         return R.renderMarkdown(text || "");
       } catch (e) {
-        if (Zotero && Zotero.logError) Zotero.logError(e);
+        if (Zotero && Zotero.logError)
+          Zotero.logError(new Error("AskGPT: Markdown rendering failed"));
       }
     }
     return renderMarkdownFallback(text);
@@ -1142,6 +1132,33 @@
     for (const link of ui.bubble.querySelectorAll("a[href]")) {
       const [source] = safeSources([{ url: link.getAttribute("href") }]);
       if (source) openExternalLink(link, source.url);
+      else link.removeAttribute("href");
+    }
+    for (const button of ui.bubble.querySelectorAll(
+      "button[data-askgpt-image]",
+    )) {
+      const [source] = safeSources([{ url: button.dataset.askgptImage }]);
+      if (!source) {
+        button.replaceWith(document.createTextNode(button.textContent));
+        continue;
+      }
+      const alt = button.textContent;
+      button.textContent = t("image.loadRemote", {
+        name: alt || new URL(source.url).hostname,
+      });
+      // Streaming replaces the whole answer. Load once the figure is stable.
+      button.disabled = streaming;
+      if (streaming) continue;
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const image = document.createElement("img");
+        image.alt = alt;
+        image.title = button.title;
+        image.referrerPolicy = "no-referrer";
+        image.src = source.url;
+        button.replaceWith(image);
+      });
     }
     enhanceScripts(ui.bubble);
     ui.wrap.querySelector(".answer-sources")?.remove();
@@ -1322,6 +1339,8 @@
             headers,
             body: JSON.stringify(payload),
             signal,
+            credentials: "omit",
+            referrerPolicy: "no-referrer",
             redirect: "error",
           }),
         );
@@ -1333,31 +1352,11 @@
         }
         throw e;
       }
-      if (!resp.ok) {
-        let detail = "";
-        try {
-          const raw = await wait(resp.text());
-          let j;
-          try {
-            j = JSON.parse(raw);
-          } catch (_) {
-            j = { error: { message: raw } };
-          }
-          detail = j.error && (j.error.message || JSON.stringify(j.error));
-        } catch (e) {
-          if (e.name === "AbortError") throw e;
-        }
-        throw new Error(
-          client.safeErrorMessage(
-            new Error(`HTTP ${resp.status}: ${detail || ""}`),
-            key,
-          ),
-        );
-      }
+      // Provider error bodies can echo the prompt, paper, or credentials.
+      if (!resp.ok) throw client.httpError(resp.status);
       reader = resp.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let buffer = "";
-      let toolCalls = {}; // index -> {name, arguments}
       let reasoning = ""; // DeepSeek 思考模式：reasoning_content 需原样回传
       let streamEnded = false;
 
@@ -1387,26 +1386,11 @@
           const delta = choice.delta || {};
           if (delta.reasoning_content) reasoning += delta.reasoning_content;
           if (delta.content) onDelta(delta.content);
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const i = tc.index || 0;
-              toolCalls[i] = toolCalls[i] || { name: "", arguments: "" };
-              if (tc.function) {
-                if (tc.function.name) toolCalls[i].name += tc.function.name;
-                if (tc.function.arguments)
-                  toolCalls[i].arguments += tc.function.arguments;
-              }
-            }
-          }
+          if (Array.isArray(delta.tool_calls) && delta.tool_calls.length)
+            throw new Error(t("search.unexpectedTool"));
         }
       }
-      const calls = Object.keys(toolCalls)
-        .sort((a, b) => a - b)
-        .map((k) => ({
-          name: toolCalls[k].name,
-          arguments: toolCalls[k].arguments,
-        }));
-      return { toolCalls: calls, reasoning };
+      return reasoning;
     } finally {
       signal.removeEventListener("abort", abort);
       if (reader) {
@@ -1639,7 +1623,7 @@
         searchCount = result.searchCount;
         ensureBubble();
       } else {
-        const result = await streamChat(
+        accReasoning = await streamChat(
           {
             model: config.model,
             temperature: clampNum(el.setTemp.value, 0, 2, 0.3),
@@ -1649,9 +1633,6 @@
           onDelta,
           controller.signal,
         );
-        accReasoning = result.reasoning;
-        if (result.toolCalls.length)
-          throw new Error(t("search.unexpectedTool"));
         if (!acc.trim()) throw new Error(t("search.emptyAnswer"));
       }
       finishRender();
@@ -2066,11 +2047,6 @@
       minH: PANEL_H_MIN,
       maxW: PANEL_W_MAX,
       maxH: PANEL_H_MAX,
-    },
-    // 调试用：渲染器是否就绪（markdown-it / KaTeX 是否加载成功）
-    rendererReady() {
-      const R = window.AskGPTRender;
-      return R && R.ready ? R.ready : { markdown: false, katex: false };
     },
   };
 

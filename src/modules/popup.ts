@@ -3,12 +3,14 @@ import { getSourceMode, readAttachmentContext } from "./fulltext";
 import { getNativeString } from "../utils/language";
 
 export type PopupOptions = { reader?: any; window?: Window };
+const PANEL_URI = "chrome://askgpt/content/popup.xhtml";
 type PanelState = {
   visible: boolean;
   loading: boolean;
   reader: any;
   generation: number;
   source: string;
+  frame?: HTMLIFrameElement;
   pending?: Promise<void>;
   cancelLoad?: () => void;
   cleanup: Array<() => void>;
@@ -45,22 +47,36 @@ function resolvePopupTarget(options: PopupOptions) {
   return { win: win as Window, reader: reader || null };
 }
 
-function panelAPI(win: Window): any {
+/** The frame can navigate. Only its packaged document receives paper data. */
+function loadedPanelFrame(win: Window): HTMLIFrameElement | null {
   try {
-    return (
-      (win.document.getElementById("askgpt-panel-frame") as HTMLIFrameElement)
-        ?.contentWindow as any
-    )?.AskGPTPopup;
+    const frame = panels.get(win)?.frame;
+    if (frame?.isConnected && frame.contentDocument?.documentURI === PANEL_URI)
+      return frame;
   } catch (e) {
-    return null;
+    // Gecko may have detached the document while unloading the window.
   }
+  return null;
+}
+
+function panelAPI(win: Window): any {
+  return (loadedPanelFrame(win)?.contentWindow as any)?.AskGPTPopup;
+}
+
+export function updateAskPopupSelection(
+  win: Window,
+  reader: any,
+  text: string,
+) {
+  const state = panels.get(win);
+  // During a source switch the iframe may still show the previous session.
+  if (state?.visible && !state.loading && state.reader === reader)
+    panelAPI(win)?.updateLiveSelection?.(text);
 }
 
 function focusPanel(win: Window) {
   try {
-    const frame = win.document.getElementById(
-      "askgpt-panel-frame",
-    ) as HTMLIFrameElement;
+    const frame = loadedPanelFrame(win);
     const input = frame?.contentDocument?.getElementById("input");
     const settings = frame?.contentDocument?.getElementById("settings");
     if (settings && !settings.classList.contains("hidden")) return;
@@ -133,8 +149,7 @@ export async function openAskPopup(options: PopupOptions = {}) {
       cleanup: [],
     };
     panels.set(mainWin, state);
-    // An iframe that loads before its first context must not inherit another
-    // window's compatibility snapshot from addon.data.popupState.
+    // A new panel starts without context until its own window publishes it.
     (mainWin as any).__askgptPopupState = null;
   }
   const wasVisible = state.visible;
@@ -215,7 +230,6 @@ export async function openAskPopup(options: PopupOptions = {}) {
       const truncated = ctx ? ctx.truncated : false;
       const itemTitle =
         (ctx && ctx.title) || reader?._item?.getField?.("title") || "";
-      if (itemTitle) addon.data.readerTitle = itemTitle;
 
       // 4) 会话 key：同一篇文献始终同一个会话（换选中段落不清空历史）
       const sessionKey = contextPath
@@ -300,10 +314,8 @@ function ensurePanel(mainWin: Window) {
     target.addEventListener(type, handler);
     state.cleanup.push(() => target.removeEventListener(type, handler));
   };
-  const frame = doc.getElementById(
-    "askgpt-panel-frame",
-  ) as HTMLIFrameElement | null;
-  let wrap = doc.getElementById("askgpt-panel-wrap") as HTMLDivElement;
+  const frame = state.frame;
+  let wrap = frame?.parentElement as HTMLDivElement;
 
   // 面板尺寸可配置（设置里改完保存会立即改 iframe；这里兜底/应用外部改动）
   const size = readPanelSize(SIZE_PREF, mainWin);
@@ -376,7 +388,8 @@ function ensurePanel(mainWin: Window) {
   // iframe 内容区（懒加载：src 设置后浏览器异步加载，不阻塞面板显示）
   const panel = doc.createElement("iframe");
   panel.id = "askgpt-panel-frame";
-  panel.src = "chrome://askgpt/content/popup.xhtml";
+  state.frame = panel;
+  panel.src = PANEL_URI;
   panel.setAttribute(
     "style",
     "width:" +
@@ -409,10 +422,7 @@ function ensurePanel(mainWin: Window) {
     lastSize = { w, h };
     // 主动通知面板重新判定布局适配档位（不依赖 iframe 自身 resize 事件）
     try {
-      const iw: any = panel.contentWindow;
-      if (iw && iw.AskGPTPopup && iw.AskGPTPopup.notifyPanelSize) {
-        iw.AskGPTPopup.notifyPanelSize(w, h);
-      }
+      panelAPI(mainWin)?.notifyPanelSize?.(w, h);
     } catch (e) {}
   };
 
@@ -542,11 +552,8 @@ function ensurePanel(mainWin: Window) {
     try {
       const ps = (mainWin as any).__askgptPopupState;
       if (!ps) return;
-      const iw = panel.contentWindow as any;
-      if (iw && iw.AskGPTPopup && iw.AskGPTPopup.refresh) {
-        iw.AskGPTPopup.refresh(ps);
-        if (state.visible) focusPanel(mainWin);
-      }
+      panelAPI(mainWin)?.refresh?.(ps);
+      if (state.visible) focusPanel(mainWin);
     } catch (e) {}
   });
 
@@ -743,20 +750,11 @@ function ensurePanelStyle(doc: any) {
   } catch (e) {}
 }
 
-/** 把状态同时存到 addon.data.popupState 并推给面板 iframe（幂等） */
+/** Keep the latest snapshot in the owning window for the panel's first load. */
 function pushPanel(mainWin: Window, payload: any) {
   (mainWin as any).__askgptPopupState = payload;
-  const g: any = (Zotero as any)[config.addonInstance];
-  g.data.popupState = payload;
   try {
-    const panel = (mainWin as any).document.getElementById(
-      "askgpt-panel-frame",
-    ) as HTMLIFrameElement | null;
-    if (!panel) return;
-    const iw: any = panel.contentWindow;
-    if (iw && iw.AskGPTPopup && iw.AskGPTPopup.refresh) {
-      iw.AskGPTPopup.refresh(payload);
-    }
+    panelAPI(mainWin)?.refresh?.(payload);
   } catch (e) {}
 }
 
@@ -777,9 +775,7 @@ export function hideAskPopup(options: PopupOptions = {}) {
       state.cancelLoad = undefined;
     }
     panelAPI(mainWin)?.cancelRequests?.();
-    const wrap = mainWin.document.getElementById(
-      "askgpt-panel-wrap",
-    ) as HTMLElement | null;
+    const wrap = state?.frame?.parentElement as HTMLElement | null;
     if (wrap) wrap.style.display = "none";
     publishPanelState(mainWin);
   } catch (e) {}
@@ -798,7 +794,7 @@ export function disposeAskPopup(win?: Window) {
     panels.delete(target);
     try {
       delete (target as any).__askgptPopupState;
-      target.document.getElementById("askgpt-panel-wrap")?.remove();
+      state?.frame?.parentElement?.remove();
       target.document.getElementById("askgpt-panel-style")?.remove();
     } catch (e) {
       // A closing native window may already have detached its document.

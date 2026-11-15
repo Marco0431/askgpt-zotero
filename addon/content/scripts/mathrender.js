@@ -338,6 +338,61 @@
       };
       plainInstance = md;
     } else {
+      // Only absolute web links may navigate out of a privileged reader panel.
+      var linkOpen = md.renderer.rules.link_open;
+      function isWebURL(value) {
+        try {
+          var url = new URL(value);
+          return (
+            (url.protocol === "https:" || url.protocol === "http:") &&
+            !url.username &&
+            !url.password
+          );
+        } catch (_) {
+          return false;
+        }
+      }
+      md.renderer.rules.link_open = function (
+        tokens,
+        index,
+        options,
+        env,
+        renderer,
+      ) {
+        if (!isWebURL(tokens[index].attrGet("href"))) return "<a>";
+        return linkOpen
+          ? linkOpen(tokens, index, options, env, renderer)
+          : renderer.renderToken(tokens, index, options);
+      };
+      var imageRule = md.renderer.rules.image;
+      md.renderer.rules.image = function (
+        tokens,
+        index,
+        options,
+        env,
+        renderer,
+      ) {
+        var token = tokens[index];
+        var src = token.attrGet("src") || "";
+        if (
+          /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/=]+$/i.test(src)
+        )
+          return imageRule(tokens, index, options, env, renderer);
+        var label = md.utils.escapeHtml(
+          renderer.renderInlineAsText(token.children || [], options, env),
+        );
+        if (!isWebURL(src)) return label;
+        // No image request until the reader explicitly loads this figure.
+        return (
+          '<button type="button" data-askgpt-image="' +
+          md.utils.escapeHtml(src) +
+          '" title="' +
+          md.utils.escapeHtml(token.attrGet("title") || "") +
+          '">' +
+          label +
+          "</button>"
+        );
+      };
       var inlineCode = md.renderer.rules.code_inline;
       md.renderer.rules.code_inline = function (
         tokens,

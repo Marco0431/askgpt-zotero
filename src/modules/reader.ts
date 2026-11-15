@@ -1,5 +1,10 @@
 import { config } from "../../package.json";
-import { getAskPopupState, openAskPopup, toggleAskPopup } from "./popup";
+import {
+  getAskPopupState,
+  openAskPopup,
+  toggleAskPopup,
+  updateAskPopupSelection,
+} from "./popup";
 import { getNativeString } from "../utils/language";
 import { createReaderToolbar, readerHostWindow } from "../utils/readerToolbar";
 
@@ -19,8 +24,6 @@ const onTextSelection = (event: any) => {
     const text = event.params?.annotation?.text;
     if (typeof text === "string" && text.trim())
       cacheSelection(text.trim(), event.reader);
-    const item = event.reader?._item;
-    if (item) addon.data.readerTitle = item.getField("title") || "";
   } catch (e) {}
 };
 
@@ -84,20 +87,13 @@ export function registerToolbar() {
   }
 }
 
-/**
- * 条目右键菜单。优先用 ztoolkit.Menu.register（模板自带 toolkit，Zotero 9 兼容），
- * 失败时回退原生 XUL 注入。
- */
+/** Add the AskGPT command to this window's item context menu. */
 export function registerContextMenu(win: Window) {
   try {
     if (win.closed) return;
     const doc = win.document;
     if (!doc) return;
-    if (
-      doc.getElementById("askgpt-menu-item") ||
-      doc.getElementById("zotero-itemmenu-askgpt")
-    )
-      return;
+    if (doc.getElementById("zotero-itemmenu-askgpt")) return;
     const itemMenu = doc.getElementById("zotero-itemmenu");
     if (!itemMenu) {
       // 最多重试 5 次（约 8 秒），避免无意义循环
@@ -124,30 +120,11 @@ export function registerContextMenu(win: Window) {
     menuRetries.delete(win);
     delete (win as any).__askgptMenuRetries;
 
-    try {
-      // Passing "item" would resolve the toolkit's global document, which can
-      // belong to a different window. Bind registration to this actual popup.
-      const registered = ztoolkit.Menu.register(itemMenu as XUL.MenuPopup, {
-        tag: "menuitem",
-        id: "zotero-itemmenu-askgpt",
-        label: getNativeString("native-item-menu"),
-        commandListener: () => openAskPopup({ window: win }),
-      });
-      if (registered !== false && doc.getElementById("zotero-itemmenu-askgpt"))
-        return;
-    } catch (e) {
-      Zotero.logError(new Error("AskGPT registerContextMenu (toolkit): " + e));
-    }
-    // The toolkit may have inserted a node before a later operation failed.
-    if (doc.getElementById("zotero-itemmenu-askgpt")) return;
-    // 原生 XUL 回退：仅在指定窗口的真实条目菜单中添加。
-    const sep = doc.createXULElement("menuseparator");
-    sep.id = "askgpt-menu-sep";
     const item = doc.createXULElement("menuitem");
-    item.id = "askgpt-menu-item";
+    item.id = "zotero-itemmenu-askgpt";
     item.setAttribute("label", getNativeString("native-item-menu"));
     item.addEventListener("command", () => openAskPopup({ window: win }));
-    itemMenu.append(sep, item);
+    itemMenu.append(item);
   } catch (e) {
     Zotero.logError(new Error("AskGPT registerContextMenu (native): " + e));
   }
@@ -161,14 +138,7 @@ export function unregisterContextMenu(win: Window) {
     delete (win as any).__askgptMenuRetries;
     const doc = win.document;
     if (!doc) return;
-    for (const id of [
-      "askgpt-menu-sep",
-      "askgpt-menu-item",
-      "zotero-itemmenu-askgpt",
-    ]) {
-      const el = doc.getElementById(id);
-      if (el) el.remove();
-    }
+    doc.getElementById("zotero-itemmenu-askgpt")?.remove();
   } catch (e) {}
 }
 
@@ -190,7 +160,8 @@ function cacheSelection(text: string, reader: any) {
   if (!reader || itemID === undefined) return;
   addon.data.readerSelection = text;
   addon.data.readerSelectionItemID = itemID;
-  notifyPopupSelection(text, reader);
+  const host = readerHostWindow(reader);
+  if (host) updateAskPopupSelection(host, reader, text);
 }
 
 export function attachToReaderDoc(doc: Document, reader?: any): boolean {
@@ -234,28 +205,6 @@ export function attachToReaderDoc(doc: Document, reader?: any): boolean {
   } catch (e) {
     return false;
   }
-}
-
-/**
- * 事件驱动：把新的选中内容推送给面板 iframe（若有）。
- * 面板是主窗口 DOM 内的 iframe，直接通过 frameElement 访问，无需窗口枚举。
- */
-export function notifyPopupSelection(sel: string, reader?: any) {
-  try {
-    const host = readerHostWindow(reader);
-    if (!host) return;
-    const state = getAskPopupState(host);
-    // During a source switch the iframe can still hold the previous session.
-    if (!state.visible || state.loading || state.reader !== reader) return;
-    const panel = host.document.getElementById(
-      "askgpt-panel-frame",
-    ) as HTMLIFrameElement;
-    if (!panel || panel.style.display === "none") return;
-    const iw = panel.contentWindow as any;
-    if (iw && iw.AskGPTPopup && iw.AskGPTPopup.updateLiveSelection) {
-      iw.AskGPTPopup.updateLiveSelection(sel);
-    }
-  } catch (e) {}
 }
 
 export function attachToReader(reader: any, maxRetries?: number) {

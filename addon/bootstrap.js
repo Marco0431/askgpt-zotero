@@ -24,7 +24,7 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
    * and all child variables assigned to it is globally accessible.
    * See `src/index.ts` for details.
    */
-  const ctx = { rootURI };
+  const ctx = { rootURI, Zotero };
   ctx._globalThis = ctx;
 
   Services.scriptloader.loadSubScript(

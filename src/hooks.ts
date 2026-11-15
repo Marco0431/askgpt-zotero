@@ -1,4 +1,3 @@
-import { initLocale } from "./utils/locale";
 import { registerPrefs, handlePrefsEvent, savePrefs } from "./modules/prefs";
 import {
   registerReader,
@@ -11,7 +10,6 @@ import {
 } from "./modules/reader";
 import { openAskPopup, hideAskPopup, disposeAskPopup } from "./modules/popup";
 import { clearFullTextCache } from "./modules/fulltext";
-import { runGeckoDiagnostics } from "./modules/diag";
 
 const windowCleanups = new Map<Window, () => void>();
 
@@ -21,8 +19,6 @@ async function onStartup() {
     Zotero.unlockPromise,
     Zotero.uiReadyPromise,
   ]);
-
-  initLocale();
 
   registerPrefs();
 
@@ -40,9 +36,7 @@ async function onStartup() {
   );
 
   addon.data.initialized = true;
-  // 一次性 Gecko 行为自检（结果写进 prefs，用于远程定位渲染类报错）
-  runGeckoDiagnostics();
-  ztoolkit.log("AskGPT started");
+  Zotero.debug("AskGPT started");
 }
 
 async function onMainWindowLoad(win: _ZoteroTypes.MainWindow): Promise<void> {
@@ -104,7 +98,6 @@ function onShutdown(): void {
   unregisterReader();
   disposeAskPopup();
   clearFullTextCache();
-  ztoolkit.unregisterAll();
   addon.data.alive = false;
   // @ts-expect-error - Plugin instance is not typed
   delete Zotero[addon.data.config.addonInstance];
@@ -115,11 +108,8 @@ export default {
   onShutdown,
   onMainWindowLoad,
   onMainWindowUnload,
-  onNotify: async () => {},
   onPrefsEvent: async (type: string, data: { [key: string]: any }) => {
     if (type === "save") savePrefs(data.window);
     else handlePrefsEvent(type, data);
   },
-  onShortcuts: () => {},
-  onDialogEvents: () => {},
 };

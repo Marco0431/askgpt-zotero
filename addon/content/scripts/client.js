@@ -280,6 +280,8 @@
           headers,
           ...(body ? { body: JSON.stringify(body) } : {}),
           signal: controller.signal,
+          credentials: "omit",
+          referrerPolicy: "no-referrer",
           redirect: "error",
         });
         let data;
@@ -425,6 +427,7 @@
     buildEndpoint,
     fetchModels,
     testConnection,
+    httpError,
     safeErrorMessage,
     formatError: safeErrorMessage,
     validateImageBatch,

@@ -495,6 +495,8 @@
           headers,
           body: JSON.stringify(body),
           signal: controller.signal,
+          credentials: "omit",
+          referrerPolicy: "no-referrer",
           redirect: "error",
         }),
       );

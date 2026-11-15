@@ -95,6 +95,7 @@ AskGPT is a Zotero plugin for asking questions about research papers without lea
   - 同一篇文献的其它附件依次兜底（PDF / Markdown / HTML / TXT）；某一路读不到文字（比如扫描版 PDF）会自动换下一路
   - PDF 优先使用新鲜且完整的 Zotero 全文索引；索引不完整或已过期时尝试重新抽取。只能取得部分文本时会标记不完整
   - HTML 译文里的 KaTeX 公式会还原成原始 LaTeX（`$...$` / `$$...$$`）；读不到全文时会明确提示「本次只发送选中段落」
+- 回答中的外部图片在点击「加载外部图片」后加载，网页链接会在浏览器中打开。
 - **真·Markdown + KaTeX 渲染**（随插件离线打包 `markdown-it` + `KaTeX`，不联网）：
   - 标题 / 表格 / 引用 / 删除线 / 有序无序列表 / 代码块 / 链接全部真渲染
   - 行内公式 `$...$`、`\(...\)`，块级公式 `$$...$$`、`\[...\]` 用 KaTeX 排版
@@ -250,7 +251,7 @@ addon/
 ## 🧩 技术亮点
 
 - 🎯 官方 `Zotero.Reader.registerEventListener` 捕获 PDF 选中（`renderTextSelectionPopup`），实时推送面板
-- 📦 基于 [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template)（windingwind 官方模板）+ [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit)
+- 📦 项目从 [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) 起步，目前通过 Zotero 原生接口注册菜单和阅读器功能。
 - 🔌 普通问答使用 OpenAI 风格的 Chat Completions 接口；提供商联网搜索要求支持 Responses API 的内置 `web_search`，实际能力取决于所选接口与模型
 - 📝 插件不内置模型服务；文献上下文发往你配置的接口，启用联网搜索后由该提供商执行搜索
 
@@ -259,7 +260,7 @@ addon/
 ## 🙏 致谢
 
 - [windingwind/zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) —— 插件开发模板
-- [windingwind/zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit) —— 工具库
+- [windingwind/zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit) —— 早期版本使用的工具库
 - [zotero-pdf-translate](https://github.com/windingwind/zotero-pdf-translate) —— Reader API 参考
 
 ---

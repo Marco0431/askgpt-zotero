@@ -7,11 +7,15 @@ import { build } from "esbuild";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const output = path.join(root, ".scaffold/test-fixtures");
 
-// Only these two modules are replaced with explicit fixture services. The real
-// popup implementation and its state machine are bundled unchanged.
+// Replace host dependencies while exercising the production modules in isolation.
 const hostServices = {
   "./fulltext": ["getSourceMode", "readAttachmentContext"],
-  "../utils/language": ["getNativeString"],
+  "../utils/language": [
+    "getNativeString",
+    "getInterfaceLanguage",
+    "refreshNativeLanguage",
+    "resolveInterfaceLocale",
+  ],
 };
 const mockServices = {
   name: "isolated-host-services",
@@ -36,7 +40,11 @@ const mockServices = {
 };
 
 const factories = [];
-for (const name of ["fulltext", "popup"]) {
+for (const [name, factoryName] of Object.entries({
+  fulltext: "createFulltext",
+  popup: "createPopup",
+  prefs: "createPrefs",
+})) {
   const result = await build({
     absWorkingDir: root,
     entryPoints: [`src/modules/${name}.ts`],
@@ -45,9 +53,8 @@ for (const name of ["fulltext", "popup"]) {
     format: "cjs",
     platform: "browser",
     target: "firefox115",
-    plugins: name === "popup" ? [mockServices] : [],
+    plugins: name === "fulltext" ? [] : [mockServices],
   });
-  const factoryName = name === "fulltext" ? "createFulltext" : "createPopup";
   // Static functions are bundled with the tests. Gecko rejects data: script
   // URIs, so no dynamic evaluation or privileged loader is needed here.
   factories.push(`export function ${factoryName}(environment: any) {

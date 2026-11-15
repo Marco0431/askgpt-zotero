@@ -15,6 +15,7 @@ pref-language-hint = Applies to AskGPT only. Reopen the chat panel to apply chan
 pref-system = System prompt (customizable)
 pref-save = Save
 pref-saved = ✓ Saved
+pref-save-failed = Could not save settings. Please try again.
 native-reader-title = AskGPT: ask about the selected text or this paper
 native-item-menu = AskGPT: ask about this item
 native-close = Close

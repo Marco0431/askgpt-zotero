@@ -24,9 +24,9 @@ export function getNativeString(
   const locale = resolveInterfaceLocale(language);
   let localization = localizations.get(locale);
   if (!localization) {
-    const Constructor =
+    const Constructor: typeof Localization =
       typeof Localization === "undefined"
-        ? ztoolkit.getGlobal("Localization")
+        ? Zotero.getMainWindow().Localization
         : Localization;
     localization = new Constructor(
       [`${config.addonRef}-preferences.ftl`],
@@ -56,7 +56,6 @@ export function refreshNativeLanguage() {
   });
   const labels = [
     ["zotero-itemmenu-askgpt", "native-item-menu", "label"],
-    ["askgpt-menu-item", "native-item-menu", "label"],
     ["askgpt-toolbar-button", "native-reader-title", "title"],
     ["askgpt-panel-close", "native-close", "title"],
     ["askgpt-panel-close", "native-close", "aria-label"],

@@ -30,6 +30,8 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       );
       const listeners = new Map<string, Set<(value: any) => void>>();
       const refreshes: any[] = [];
+      const selections: string[] = [];
+      let frameDocumentURI = "chrome://askgpt/content/popup.xhtml";
       let cancellations = 0;
       const win: any = {
         document: doc,
@@ -90,12 +92,17 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
               '<html xmlns="http://www.w3.org/1999/xhtml"><body><input id="input"/><section id="settings" class="hidden"/></body></html>',
               "application/xhtml+xml",
             );
+            Object.defineProperty(frameDoc, "documentURI", {
+              get: () => frameDocumentURI,
+            });
             Object.defineProperties(element, {
               contentDocument: { value: frameDoc },
               contentWindow: {
                 value: {
                   AskGPTPopup: {
                     refresh: (payload: any) => refreshes.push(payload),
+                    updateLiveSelection: (text: string) =>
+                      selections.push(text),
                     cancelRequests: () => {
                       cancellations++;
                     },
@@ -112,6 +119,10 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
         win,
         doc,
         refreshes,
+        selections,
+        setFrameDocumentURI: (uri: string) => {
+          frameDocumentURI = uri;
+        },
         listeners,
         cancellations: () => cancellations,
       };
@@ -225,6 +236,29 @@ export function registerPanelHostTests(loadModule: (environment: any) => any) {
       );
       ui.api.disposeAskPopup();
       assert.lengthOf(ui.errors, 0);
+    });
+
+    it("delivers paper state only to the loaded AskGPT panel document", async function () {
+      const ui = harness();
+      const reader = ui.reader(1);
+      ui.first.setFrameDocumentURI("about:blank");
+      const pending = ui.api.openAskPopup({ reader });
+      await tick();
+      ui.resolve(0);
+      await pending;
+      const frame = ui.first.doc.getElementById("askgpt-panel-frame")!;
+      frame.dispatchEvent(event(ui.first.doc, "load"));
+      ui.api.updateAskPopupSelection(ui.first.win, reader, "selection");
+      assert.isEmpty(ui.first.refreshes);
+      assert.isEmpty(ui.first.selections);
+      assert.notProperty(ui.addon.data, "popupState");
+
+      ui.first.setFrameDocumentURI("chrome://askgpt/content/popup.xhtml");
+      frame.dispatchEvent(event(ui.first.doc, "load"));
+      ui.api.updateAskPopupSelection(ui.first.win, reader, "selection");
+      assert.equal(ui.first.refreshes.at(-1).contextText, "paper-1");
+      assert.deepEqual(ui.first.selections, ["selection"]);
+      ui.api.disposeAskPopup();
     });
 
     it("does not let an older paper read replace the newer reader", async function () {

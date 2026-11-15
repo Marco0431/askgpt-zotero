@@ -1,7 +1,7 @@
 pref("baseURL", "https://api.deepseek.com");
 pref("apiKey", "");
 pref("model", "deepseek-chat");
-pref("temperature", 0.3);
+pref("temperature", "0.3");
 // Native search may incur provider tool charges; require explicit opt-in.
 pref("nativeSearch", false);
 pref("language", "auto");

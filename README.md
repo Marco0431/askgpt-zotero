@@ -122,6 +122,8 @@ AskGPT requires desktop Zotero and an OpenAI-compatible Chat Completions endpoin
 
 Available paper context, selected text, conversation history, and images you send are transmitted to the model endpoint you configure. Fetching models sends your API credentials to that endpoint; the connection test additionally sends a small test prompt. With provider web search enabled, the configured provider executes searches as part of the response. Local math rendering does not make remote model inference offline.
 
+External figures in an answer load when you click **Load external image**. Opening a citation or other web link opens it in your browser.
+
 API settings, including the key, are stored in your local Zotero preferences. The plugin does not add encryption around that stored key. Do not include your Zotero profile, credentials, or private paper text in a public issue.
 
 The plugin keeps a stable system-and-paper prefix where possible, but still sends context with requests. Provider-side cache hits, prices, and context limits depend on the endpoint; the plugin does not guarantee a particular discount. Local full-text caching checks the file version, combines concurrent reads, and has a size limit and expiry. A fresh, complete Zotero index can be reused; partial indexes trigger full extraction where available. The panel marks incomplete or truncated context, and indicates when only selected text is available. Conversations are retained while Zotero is running; save a note to keep an answer beyond that session.
@@ -167,4 +169,4 @@ Run `npm run check:package` after a build to verify required runtime assets and 
 
 Documentation fixes and small, focused pull requests are welcome. For larger changes, describe the use case in an issue first so the implementation can be discussed. Run the checks in [Development](#development) for code changes.
 
-Licensed under [AGPL-3.0](LICENSE). Built with [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) and [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit). The reader integration also draws on [zotero-pdf-translate](https://github.com/windingwind/zotero-pdf-translate).
+Licensed under [AGPL-3.0](LICENSE). The project started from [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template). AskGPT registers its menus and reader integration through Zotero directly. The reader integration also draws on [zotero-pdf-translate](https://github.com/windingwind/zotero-pdf-translate).

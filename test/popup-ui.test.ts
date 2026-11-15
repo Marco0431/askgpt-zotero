@@ -203,6 +203,7 @@ describe("AskGPT settings and image interaction", function () {
     else if (typeof prompt === "string")
       prefs.set(prefix + "systemPrompt", prompt);
     if (legacySearch) prefs.delete(prefix + "nativeSearch");
+    const globalPrefs = new Map<string, unknown>();
     const writes: Array<[string, unknown]> = [];
     const requests: any[] = [];
     const logs: unknown[] = [];
@@ -213,7 +214,10 @@ describe("AskGPT settings and image interaction", function () {
     const host = {
       locale: "zh-CN",
       Prefs: {
-        get: (name: string) => prefs.get(name),
+        get: (name: string, global = false) =>
+          (global ? globalPrefs : prefs).get(name),
+        clear: (name: string, global = false) =>
+          (global ? globalPrefs : prefs).delete(name),
         set: (name: string, value: unknown) => {
           writes.push([name, value]);
           prefs.set(name, value);
@@ -321,7 +325,14 @@ describe("AskGPT settings and image interaction", function () {
         load(path);
       }
     }
-    for (const path of ["prompts", "i18n", "client", "native-search", "popup"])
+    for (const path of [
+      "prompts",
+      "settings",
+      "i18n",
+      "client",
+      "native-search",
+      "popup",
+    ])
       load(`scripts/${path}.js`);
     doc.dispatchEvent(event(doc, "DOMContentLoaded"));
     const get = (id: string) => doc.getElementById(id) as any;
@@ -359,6 +370,7 @@ describe("AskGPT settings and image interaction", function () {
     return {
       doc,
       prefs,
+      globalPrefs,
       writes,
       requests,
       logs,
@@ -440,8 +452,27 @@ describe("AskGPT settings and image interaction", function () {
     );
     assert.equal(ui.prefs.get(prefix + "apiKey"), "draft-test-key");
     assert.equal(ui.prefs.get(prefix + "model"), "vision-model");
-    assert.equal(ui.prefs.get(prefix + "temperature"), 0);
+    assert.equal(ui.prefs.get(prefix + "temperature"), "0");
     assert.isTrue(ui.get("settings").classList.contains("hidden"));
+  });
+
+  it("saves fractional temperature over a legacy integer and clears the old duplicate key on explicit save", function () {
+    const ui = harness();
+    ui.prefs.set(prefix + "temperature", 1);
+    ui.globalPrefs.set(prefix + "apiKey", "old-native-credential");
+    ui.click("btn-settings");
+    assert.equal(ui.get("set-temp").value, "1");
+    assert.equal(ui.get("set-key").value, "saved-test-key");
+    assert.isTrue(ui.globalPrefs.has(prefix + "apiKey"));
+    ui.input("set-temp", "0.35");
+    ui.input("set-key", "");
+    ui.click("btn-save");
+    assert.equal(ui.prefs.get(prefix + "temperature"), "0.35");
+    assert.equal(ui.prefs.get(prefix + "apiKey"), "");
+    assert.isFalse(ui.globalPrefs.has(prefix + "apiKey"));
+    ui.click("btn-settings");
+    assert.equal(ui.get("set-temp").value, "0.35");
+    assert.equal(ui.get("set-key").value, "");
   });
 
   it("cancels pending discovery and discards unsaved edits", async function () {
@@ -520,6 +551,8 @@ describe("AskGPT settings and image interaction", function () {
     await ui.attach(true);
     await ui.popup.send("Explain the figure.");
     assert.lengthOf(ui.requests, 1);
+    assert.equal(ui.requests[0].credentials, "omit");
+    assert.equal(ui.requests[0].referrerPolicy, "no-referrer");
     const first = JSON.parse(ui.requests[0].body);
     const user = first.messages[first.messages.length - 1];
     assert.deepEqual(user, {
@@ -1095,6 +1128,39 @@ describe("AskGPT settings and image interaction", function () {
       assert.notProperty(message, "citations");
   });
 
+  it("keeps non-web links inert and lets the reader choose whether to load external figures", function () {
+    const ui = harness(false, false, true);
+    ui.popup.refresh({
+      session: {
+        key: "paper-a",
+        history: [
+          {
+            role: "assistant",
+            content:
+              "[relative](other.xhtml) [paper](https://example.test/paper) ![Plate 1](https://example.test/figure.png)",
+          },
+        ],
+      },
+    });
+    const bubble = ui.doc.querySelector(".msg.assistant .bubble")!;
+    assert.isNull(bubble.querySelector("img"));
+    assert.lengthOf(bubble.querySelectorAll("a[href]"), 1);
+    assert.equal(
+      bubble.querySelector("a[href]")!.getAttribute("href"),
+      "https://example.test/paper",
+    );
+    const figure = bubble.querySelector("button[data-askgpt-image]")!;
+    assert.include(figure.textContent, "Plate 1");
+    // The fixture uses an inert, detached document; this does not fetch a picture.
+    figure.dispatchEvent(event(ui.doc, "click"));
+    assert.equal(
+      bubble.querySelector("img")!.getAttribute("src"),
+      "https://example.test/figure.png",
+    );
+    assert.equal(bubble.querySelector("img")!.getAttribute("alt"), "Plate 1");
+    assert.isEmpty(ui.launchedURLs);
+  });
+
   it("saves an earlier answer with its own question after a later request fails", async function () {
     const ui = harness();
     ui.popup.refresh({
@@ -1120,6 +1186,30 @@ describe("AskGPT settings and image interaction", function () {
       "FAILED_SECOND_QUESTION",
     );
     assert.include(note.body.textContent || "", "A test answer.");
+  });
+
+  it("keeps private provider error bodies out of the chat and Zotero log", async function () {
+    const ui = harness();
+    ui.popup.refresh({
+      contextText: "An example paper.",
+      session: { key: "paper-a", history: [] },
+    });
+    let readBody = false;
+    ui.setTransport(async () => ({
+      ok: false,
+      status: 401,
+      text: async () => {
+        readBody = true;
+        return "Private provider diagnostic text";
+      },
+    }));
+    await ui.popup.send("Question about the paper");
+    assert.isFalse(readBody);
+    assert.include(ui.get("statusline").textContent, "401");
+    assert.notInclude(
+      [ui.get("statusline").textContent, ...ui.logs].join(" "),
+      "Private provider diagnostic text",
+    );
   });
 
   it("redacts saved and draft credentials from global error diagnostics", function () {
@@ -1351,7 +1441,7 @@ describe("AskGPT settings and image interaction", function () {
     Object.defineProperty(escape, "key", { value: "Escape" });
     ui.doc.dispatchEvent(escape);
     assert.deepEqual(ui.hiddenWindows, [ui.hostWindow]);
-    ui.hostWindow.__askgptPopupState = null;
+    delete ui.hostWindow.__askgptPopupState;
     ui.popup.refresh();
     await ui.popup.send("This must not pick up the other paper.");
     assert.lengthOf(ui.requests, 1);

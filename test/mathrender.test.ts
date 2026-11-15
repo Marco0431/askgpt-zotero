@@ -29,7 +29,7 @@ describe("AskGPT Markdown and mathematical rendering", function () {
           ? Zotero.getMainWindow()
           : window;
       // Keep the native function's Window receiver; do not copy an unbound atob.
-      scope = { atob: (value: string) => host.atob(value) };
+      scope = { URL, atob: (value: string) => host.atob(value) };
       scope.window = scope;
       scope.self = scope;
       scope.globalThis = scope;
@@ -111,15 +111,16 @@ describe("AskGPT Markdown and mathematical rendering", function () {
     assert.equal(calls.count, 0);
   });
 
-  it("preserves link destinations, titles, and image source and alt text", function () {
+  it("preserves web links and figure labels without fetching external images", function () {
     const html = render.renderMarkdown(
       '[link](https://example.org/$x$ "$y$") ![figure $z$](https://example.org/$w$.png "$v$")',
     );
     assert.include(html, 'href="https://example.org/$x$" title="$y$"');
     assert.include(
       html,
-      'src="https://example.org/$w$.png" alt="figure $z$" title="$v$"',
+      'data-askgpt-image="https://example.org/$w$.png" title="$v$">figure $z$</button>',
     );
+    assert.notInclude(html, "<img");
     assert.equal(mathCount(html), 0);
     assert.equal(calls.count, 0);
     assert.equal(

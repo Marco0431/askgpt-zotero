@@ -177,6 +177,8 @@ describe("AskGPT provider-native search", function () {
     });
     assert.equal(sent.url, "https://provider.example/v1/responses");
     assert.equal(sent.redirect, "error");
+    assert.equal(sent.credentials, "omit");
+    assert.equal(sent.referrerPolicy, "no-referrer");
     assert.equal(sent.headers.Authorization, "Bearer " + config.apiKey);
     assert.equal(sent.method, "POST");
     assert.deepEqual(sent.payload.input, [

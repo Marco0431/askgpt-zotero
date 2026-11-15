@@ -20,6 +20,8 @@ const required = [
   "content/scripts/client.js",
   "content/scripts/i18n.js",
   "content/scripts/native-search.js",
+  "content/scripts/popup.js",
+  "content/scripts/settings.js",
   "content/scripts/prompts.js",
   "content/scripts/mathrender.js",
   "content/vendor/markdown-it.min.js",
@@ -53,9 +55,23 @@ for (const entry of files) {
     /(^|\/)(tests?|scripts\/test|node_modules|\.scaffold|src)(\/|$)|\.(test|spec)\.|\.(ts|tsx|map)$/i,
     `Development file leaked into XPI: ${name}`,
   );
+  if (name.endsWith(".xhtml")) {
+    const markup = entry.getData().toString("utf8");
+    for (const [, asset] of markup.matchAll(
+      /(?:src|href)="chrome:\/\/askgpt\/([^"#]+)"/g,
+    )) {
+      assert.ok(names.has(asset), `Missing resource ${asset} used by ${name}`);
+    }
+  }
   if (name.endsWith(".js")) {
+    const script = entry.getData().toString("utf8");
     assert.doesNotMatch(
-      entry.getData().toString("utf8"),
+      script,
+      /zotero:\/\/(?:ztoolkit-debug|plugin)\b/i,
+      `Toolkit debug or plugin-install protocol in release script: ${name}`,
+    );
+    assert.doesNotMatch(
+      script,
       /registerFulltextTests|registerPanelHostTests|__askgptTestEnvironment|PRIVATE_HISTORY_SENTINEL/,
       `Test implementation leaked into ${name}`,
     );

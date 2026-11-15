@@ -15,6 +15,7 @@ pref-language-hint = 仅影响 AskGPT；重新打开对话面板后，面板语�
 pref-system = 系统提示词（可自定义）
 pref-save = 保存
 pref-saved = ✓ 已保存
+pref-save-failed = 保存设置失败，请重试。
 native-reader-title = AskGPT：就选中文字或本篇文献提问
 native-item-menu = AskGPT：对本条目提问
 native-close = 关闭
