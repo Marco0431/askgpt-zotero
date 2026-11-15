@@ -10,7 +10,9 @@ const archive = new AdmZip(path.join(root, ".scaffold/build/askgpt.xpi"));
 const files = archive.getEntries().filter((entry) => !entry.isDirectory);
 const names = new Set(files.map((entry) => entry.entryName));
 const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+const notices = "content/vendor/THIRD-PARTY-NOTICES.txt";
 const required = [
+  "LICENSE",
   "bootstrap.js",
   "manifest.json",
   "prefs.js",
@@ -27,11 +29,17 @@ const required = [
   "content/vendor/markdown-it.min.js",
   "content/vendor/katex/katex.min.js",
   "content/vendor/katex/katex.min.css",
+  notices,
   "locale/en-US/askgpt-preferences.ftl",
   "locale/zh-CN/askgpt-preferences.ftl",
 ];
 for (const name of required)
   assert.ok(names.has(name), `Missing runtime asset: ${name}`);
+assert.equal(
+  archive.readAsText(notices),
+  readFileSync(path.join(root, "addon", notices), "utf8"),
+  "The XPI must include the full third-party notices",
+);
 const manifest = JSON.parse(archive.readAsText("manifest.json"));
 assert.equal(
   manifest.version,
@@ -47,7 +55,7 @@ for (const entry of files) {
   const name = entry.entryName;
   assert.match(
     name,
-    /^(bootstrap\.js|manifest\.json|prefs\.js|content\/[^.].*|locale\/[^.].*)$/,
+    /^(LICENSE|bootstrap\.js|manifest\.json|prefs\.js|content\/[^.].*|locale\/[^.].*)$/,
     `Unexpected package entry: ${name}`,
   );
   assert.doesNotMatch(
