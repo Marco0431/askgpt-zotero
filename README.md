@@ -1,4 +1,4 @@
-[简体中文](README.zh-CN.md) · **English**
+[简体中文](docs/zh-CN.md) · **English**
 
 # AskGPT — AI Paper Reader for Zotero
 
