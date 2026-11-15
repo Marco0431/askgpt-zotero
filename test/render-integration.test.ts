@@ -118,7 +118,14 @@ describe("AskGPT real renderer integration", function () {
       stats.markdownInputs.push(text);
       return markdown(text);
     };
-    for (const path of ["prompts", "i18n", "client", "native-search", "popup"])
+    for (const path of [
+      "prompts",
+      "settings",
+      "i18n",
+      "client",
+      "native-search",
+      "popup",
+    ])
       load(`scripts/${path}.js`);
     const ready = doc.createEvent("Event");
     ready.initEvent("DOMContentLoaded", true, true);

@@ -133,6 +133,8 @@ describe("AskGPT connection and image helpers", function () {
     assert.equal(sent.url, "https://example.test/v1/models");
     assert.equal(sent.method, "GET");
     assert.equal(sent.redirect, "error");
+    assert.equal(sent.credentials, "omit");
+    assert.equal(sent.referrerPolicy, "no-referrer");
     assert.equal(sent.headers.Authorization, "Bearer sk-test-secret");
     assert.isUndefined(sent.body);
     assert.deepEqual(JSON.parse(JSON.stringify(models)), [

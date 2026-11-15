@@ -2,7 +2,7 @@
  * AskGPT 弹窗逻辑 —— 轻量 agent：
  *   - 轻量级 system prompt（参考开源 agent 通用写法：角色 + 能力边界 + 工具规则 + 输出约束）
  *   - Native web search through the configured provider's Responses API
- *   - OpenAI 兼容 chat/completions，流式输出，function calling
+ *   - OpenAI 兼容 chat/completions，流式输出
  *   - 全部设置存在 Zotero.Prefs，纯本地
  */
 (function () {
@@ -71,11 +71,14 @@
   let messages = []; // 本次会话追加的消息（不含前缀）
   let sessionBase = null; // 固定前缀 [system, 全文]（来自主进程会话）
   let sessionKey = ""; // 当前文章会话的 key（附件路径 / 选中文字指纹）
+  let activeSession = null;
+  let noteTarget = null;
   let controller = null; // AbortController 用于停止
+  let preservePendingTurn = null;
   let busy = false;
   let pendingImages = [];
-  let readingImages = false;
-  let imageRevision = 0;
+  let imageBatches = [];
+  let imageSource = null;
   let connectionController = null;
   let fetchedModels = [];
   let modelsConfig = "";
@@ -123,14 +126,20 @@
     }
   }
   function loadSession(session) {
-    if (((session && session.key) || "") !== sessionKey) clearAttachments();
     // 从主进程会话恢复：前缀 + 历史
     sessionKey = (session && session.key) || "";
-    sessionBase = (session && session.base) || null;
-    sessionBaseText = sessionBase
-      ? (session && session.baseText) || (session && session.contextText) || ""
-      : "";
-    messages = (session && session.history) || [];
+    activeSession = session;
+    const data = getAskGPT()?.data;
+    if (sessionKey && data) {
+      const sessions = (data.sessions ||= {});
+      activeSession = sessions[sessionKey] ||= session;
+    }
+    noteTarget = session?.noteTarget || null;
+    // Only reuse a prefix built from the full text currently held by this panel.
+    const cachedText = session?.baseText || session?.contextText || "";
+    sessionBase =
+      paperText && cachedText === paperText ? session?.base || null : null;
+    sessionBaseText = sessionBase ? cachedText : "";
     // Apply the saved language/prompt to resumed sessions without rewriting history.
     if (sessionBase?.[0]?.role === "system") {
       sessionBase = [
@@ -141,16 +150,14 @@
         ...sessionBase.slice(1),
       ];
     }
-    // 主进程会话里带着上次读到的全文（面板重开时不必等重新读盘）
-    if (!paperText && session && session.contextText) {
-      paperText = session.contextText;
-      paperLabel = session.contextLabel || "";
-      paperChars = paperText.length;
-    }
     if (!paperTitle && session && session.itemTitle) {
       paperTitle = session.itemTitle;
     }
-    // 恢复 UI 历史（user/assistant 气泡，跳过 tool 轮）
+    renderHistory(activeSession?.history || []);
+    if (!sessionBase) sessionBase = buildSessionBase();
+  }
+  function renderHistory(history) {
+    messages = history;
     el.messages.innerHTML = "";
     el.emptyTip.style.display = messages.length ? "none" : "";
     for (const m of messages) {
@@ -175,45 +182,22 @@
       }
     }
     el.messages.scrollTop = el.messages.scrollHeight;
-    // 前缀重建（同文章会话恢复后前缀应保持）
-    if (!sessionBase) {
-      sessionBase = buildSessionBaseFromState(session);
-      if (session) session.base = sessionBase;
+  }
+  function syncHistory() {
+    if (!busy && activeSession?.history && activeSession.history !== messages) {
+      renderHistory(activeSession.history);
     }
   }
-  function persistSession() {
-    const g = getAskGPT();
-    if (!g || !g.data || !sessionKey) return;
-    if (!g.data.sessions) g.data.sessions = {};
-    // 合并写回：主进程在同一个 session 上还存了 contextText / selection 等字段，
-    // 不能被面板覆盖掉
-    const prev = g.data.sessions[sessionKey] || {};
-    const patch = {
-      key: sessionKey,
-      base: sessionBase,
-      baseText: sessionBaseText,
-      history: messages,
-      selection: focusSel,
-      itemTitle: paperTitle || prev.itemTitle || "",
-      chars: paperChars,
-      truncated: paperTruncated,
-      hasFullText: !!paperText,
-    };
-    // 没读到全文时不要把主进程写好的 contextText 抹掉
-    if (paperText) {
-      patch.contextText = paperText;
-      patch.contextLabel = paperLabel;
+  function persistSessionBase() {
+    if (activeSession && (activeSession.contextText || "") === paperText) {
+      activeSession.base = sessionBase;
+      activeSession.baseText = sessionBaseText;
     }
-    g.data.sessions[sessionKey] = Object.assign({}, prev, patch);
-  }
-  function buildSessionBaseFromState(session) {
-    const contextText =
-      (session && session.contextText) || paperText || focusSel || "";
-    if (!contextText) return null;
-    return makeSessionBase(contextText);
   }
   /** 固定前缀 = system + 整篇文献（同一篇文献反复提问前缀不变 → API 前缀缓存命中） */
-  function makeSessionBase(contextText) {
+  function buildSessionBase() {
+    const contextText = (paperText || "").trim();
+    if (!contextText) return null;
     sessionBaseText = contextText;
     const sysText = savedSystemPrompt();
     return [
@@ -223,20 +207,6 @@
         content: t("prompt.paper", { text: contextText }),
       },
     ];
-  }
-  function buildSessionBase() {
-    // 固定前缀一律用整篇文献（而不是当前显示的选中文字）：
-    // 同一篇文献反复提问前缀不变 → API 前缀缓存持续命中
-    let contextText = paperText || focusSel || "";
-    contextText = (contextText || "").trim();
-    if (!contextText) return null;
-    return makeSessionBase(contextText);
-  }
-
-  function sessionFingerprint() {
-    // 上下文的指纹：用整篇文献的前 200 字符 + 长度
-    const t = paperText || focusSel || "";
-    return t.slice(0, 200) + ":" + t.length;
   }
 
   /* ---------- DOM ---------- */
@@ -448,11 +418,15 @@
       );
   }
 
+  let settingsSnapshot;
+  let readProviderKey;
   function loadSettings() {
+    settingsSnapshot =
+      Zotero?.Prefs && window.AskGPTSettings.snapshot(Zotero.Prefs);
     applyLanguage(getPref("language", "auto"));
     // 每次读设置前先按当前 iframe 尺寸判定一次适配档位（决定徽章用长文案还是短文案）
     syncViewportClasses();
-    // 读设置时顺手清洗：老版本粘贴进来带换行/零宽字符的值会自动修好并写回
+    // 清理旧配置中的不可见字符，在明确保存前只更新表单。
     const rawBase = String(
       getPref("baseURL", "https://api.deepseek.com") || "",
     );
@@ -461,11 +435,12 @@
     const cleanBase = stripInvisible(rawBase);
     const cleanKey = stripInvisible(rawKey);
     const cleanModel = stripInvisible(rawModel);
-    if (cleanBase !== rawBase) setPref("baseURL", cleanBase);
-    if (cleanKey !== rawKey) setPref("apiKey", cleanKey);
-    if (cleanModel !== rawModel) setPref("model", cleanModel);
     el.setBase.value = cleanBase;
     el.setKey.value = cleanKey;
+    readProviderKey = window.AskGPTSettings.bindProviderKey(
+      el.setBase,
+      el.setKey,
+    );
     el.setModel.value = cleanModel;
     if (modelsConfig && modelsConfig !== connectionKey()) invalidateModels();
     else $("set-model-select").value = cleanModel;
@@ -508,18 +483,21 @@
       if (!stripInvisible(el.setModel.value).trim()) {
         throw new Error(t("model.required"));
       }
-    } catch (error) {
-      el.saveStatus.textContent = client.safeErrorMessage(
-        error,
-        el.setKey.value,
+      window.AskGPTSettings.saveConnection(
+        Zotero.Prefs,
+        {
+          ...connectionConfig(),
+          temperature: el.setTemp.value,
+        },
+        settingsSnapshot,
       );
+    } catch (error) {
+      el.saveStatus.textContent =
+        error?.name === "StaleAskGPTSettings"
+          ? t("settings.changedElsewhere")
+          : client.safeErrorMessage(error, el.setKey.value);
       return;
     }
-    const config = connectionConfig();
-    setPref("baseURL", config.baseURL);
-    setPref("apiKey", config.apiKey);
-    setPref("model", config.model);
-    setPref("temperature", clampNum(el.setTemp.value, 0, 2, 0.3));
     setPref("systemPrompt", el.setSys.value);
     setPref("language", i18n.language());
     try {
@@ -536,7 +514,7 @@
     el.setKey.value = stripInvisible(el.setKey.value);
     el.setModel.value = stripInvisible(el.setModel.value);
     sessionBase = null;
-    persistSession();
+    persistSessionBase();
     updateBadge();
     closeSettings();
     setStatusKey("settings.saved");
@@ -548,7 +526,7 @@
   function connectionConfig() {
     return {
       baseURL: stripInvisible(el.setBase.value).trim(),
-      apiKey: stripInvisible(el.setKey.value).trim(),
+      apiKey: stripInvisible(readProviderKey()).trim(),
       model: stripInvisible(el.setModel.value).trim(),
     };
   }
@@ -592,6 +570,10 @@
 
   async function checkConnection(kind) {
     cancelConnection();
+    if (settingsSnapshot !== window.AskGPTSettings.snapshot(Zotero.Prefs)) {
+      connectionStatusKey("settings.changedElsewhere", {}, "error");
+      return;
+    }
     const current = new AbortController();
     connectionController = current;
     const config = connectionConfig();
@@ -705,37 +687,45 @@
   }
 
   function clearAttachments() {
-    imageRevision++;
+    imageBatches.length = 0;
+    imageBatches = [];
     pendingImages = [];
     renderAttachments();
+    el.btnSend.disabled = busy;
     $("image-input").value = "";
   }
 
   async function addImages(files) {
-    if (busy || readingImages) return;
+    if (busy) return;
     const batch = Array.from(files);
     if (!batch.length) return;
-    const revision = imageRevision;
-    readingImages = true;
-    el.btnSend.disabled = true;
-    $("btn-attach").disabled = true;
+    $("image-input").value = "";
+    const queue = imageBatches;
     try {
-      client.validateImageBatch(batch, pendingImages);
-      const images = await Promise.all(
-        batch.map((file) => client.readImage(file)),
-      );
-      if (revision !== imageRevision) return;
-      pendingImages.push(...images);
-      renderAttachments();
-      setStatusKey("image.added");
+      client.validateImageBatch(batch, [...pendingImages, ...queue.flat()]);
     } catch (error) {
-      if (revision === imageRevision) setStatus(client.safeErrorMessage(error));
-    } finally {
-      readingImages = false;
-      el.btnSend.disabled = busy;
-      $("btn-attach").disabled = busy;
-      $("image-input").value = "";
+      setStatus(client.safeErrorMessage(error));
+      return;
     }
+    queue.push(batch);
+    if (queue.length > 1) return;
+    el.btnSend.disabled = true;
+    while (queue.length) {
+      try {
+        const images = await Promise.all(
+          queue[0].map((file) => client.readImage(file)),
+        );
+        if (imageBatches !== queue) return;
+        pendingImages.push(...images);
+        renderAttachments();
+        setStatusKey("image.added");
+      } catch (error) {
+        if (imageBatches !== queue) return;
+        setStatus(client.safeErrorMessage(error));
+      }
+      queue.shift();
+    }
+    el.btnSend.disabled = busy;
   }
 
   /* ---------- 上下文来源（整篇文献 + 选中段落） ---------- */
@@ -749,7 +739,6 @@
         window.frameElement?.ownerDocument?.defaultView ||
         window.frameElement?.ownerGlobal ||
         window.opener ||
-        Zotero?.getMainWindow?.() ||
         null
       );
     } catch {
@@ -765,13 +754,7 @@
       ) {
         return host.__askgptPopupState;
       }
-      return (
-        (Zotero &&
-          Zotero.AskGPT &&
-          Zotero.AskGPT.data &&
-          Zotero.AskGPT.data.popupState) ||
-        null
-      );
+      return null;
     } catch (e) {
       return null;
     }
@@ -779,7 +762,7 @@
 
   function refresh(payload) {
     if (busy) {
-      queuedRefresh = payload || getPopupState();
+      queuedRefresh = payload ?? getPopupState();
       const next = queuedRefresh;
       if (
         next &&
@@ -827,7 +810,16 @@
       if (ps.session) session = ps.session;
     }
 
-    // 主进程打开面板会先发 loading/null，尚未确定是否切换文献。
+    const snapshot = payload ?? ps;
+    const source = typeof snapshot === "string" ? ps?.source : snapshot?.source;
+    if (typeof source === "string") {
+      if (source !== imageSource) clearAttachments();
+      imageSource = source;
+    } else if (!(loading && !session) && (session?.key || "") !== sessionKey) {
+      // Older hosts first identify the paper in the completed session.
+      clearAttachments();
+      imageSource = null;
+    }
     if (loading && !session) {
       paperLoading = true;
       updateContextBadges();
@@ -845,22 +837,21 @@
       sessionBaseText = "";
     }
     // 同一文献 loading 阶段保留已读取的内容，界面不闪。
-    if (contextText) {
-      if (contextText !== paperText) {
-        // 全文晚到或被替换：之前可能用选中段落建过前缀，作废重建（历史保留）
-        if (sessionBase && sessionBaseText && sessionBaseText !== contextText) {
-          sessionBase = null;
-          sessionBaseText = "";
-        }
-      }
+    if (typeof snapshot?.contextText === "string") {
       paperText = contextText;
-      paperLabel = contextLabel || paperLabel;
-      paperChars = contextChars || contextText.length;
+      paperLabel = contextLabel;
+      paperChars = contextChars;
       paperTruncated = truncated;
+    } else if (!paperText && session?.contextText) {
+      paperText = session.contextText;
+      paperLabel = session.contextLabel || "";
+      paperChars = paperText.length;
+      paperTruncated = !!session.truncated;
     }
     if (itemTitle) paperTitle = itemTitle;
     paperLoading = loading;
-    if (selection) focusSel = String(selection).trim();
+    if (typeof snapshot === "string" || typeof snapshot?.selection === "string")
+      focusSel = selection.trim();
 
     // 先恢复会话（可能带回上次的全文），再刷新顶部状态徽章
     loadSession(session);
@@ -950,7 +941,8 @@
       try {
         return R.renderMarkdown(text || "");
       } catch (e) {
-        if (Zotero && Zotero.logError) Zotero.logError(e);
+        if (Zotero && Zotero.logError)
+          Zotero.logError(new Error("AskGPT: Markdown rendering failed"));
       }
     }
     return renderMarkdownFallback(text);
@@ -1142,6 +1134,55 @@
     for (const link of ui.bubble.querySelectorAll("a[href]")) {
       const [source] = safeSources([{ url: link.getAttribute("href") }]);
       if (source) openExternalLink(link, source.url);
+      else link.removeAttribute("href");
+    }
+    for (const button of ui.bubble.querySelectorAll(
+      "button[data-askgpt-image]",
+    )) {
+      const [source] = safeSources([{ url: button.dataset.askgptImage }]);
+      if (!source) {
+        button.replaceWith(document.createTextNode(button.textContent));
+        continue;
+      }
+      const alt = button.textContent;
+      button.textContent = t("image.loadRemote", {
+        name: alt || new URL(source.url).hostname,
+      });
+      // Streaming replaces the whole answer. Load once the figure is stable.
+      button.disabled = streaming;
+      if (streaming) continue;
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const image = document.createElement("img");
+        image.alt = alt;
+        image.title = button.title;
+        image.crossOrigin = "anonymous";
+        image.referrerPolicy = "no-referrer";
+        image.addEventListener(
+          "error",
+          () => {
+            // Servers without CORS support can still be visited in the browser.
+            const link = sourceLink(
+              source,
+              t("image.openRemote", {
+                name: alt || new URL(source.url).hostname,
+              }),
+              "source-link",
+            );
+            const parentLink = image.closest("a");
+            if (parentLink) {
+              image.replaceWith(document.createTextNode(alt));
+              parentLink.after(link);
+            } else {
+              image.replaceWith(link);
+            }
+          },
+          { once: true },
+        );
+        image.src = source.url;
+        button.replaceWith(image);
+      });
     }
     enhanceScripts(ui.bubble);
     ui.wrap.querySelector(".answer-sources")?.remove();
@@ -1322,6 +1363,8 @@
             headers,
             body: JSON.stringify(payload),
             signal,
+            credentials: "omit",
+            referrerPolicy: "no-referrer",
             redirect: "error",
           }),
         );
@@ -1333,80 +1376,81 @@
         }
         throw e;
       }
-      if (!resp.ok) {
-        let detail = "";
-        try {
-          const raw = await wait(resp.text());
-          let j;
-          try {
-            j = JSON.parse(raw);
-          } catch (_) {
-            j = { error: { message: raw } };
-          }
-          detail = j.error && (j.error.message || JSON.stringify(j.error));
-        } catch (e) {
-          if (e.name === "AbortError") throw e;
-        }
-        throw new Error(
-          client.safeErrorMessage(
-            new Error(`HTTP ${resp.status}: ${detail || ""}`),
-            key,
-          ),
-        );
-      }
+      // Provider error bodies can echo the prompt, paper, or credentials.
+      if (!resp.ok) throw client.httpError(resp.status);
+      if (!resp.body?.getReader) throw new Error(t("chat.invalidStream"));
       reader = resp.body.getReader();
       const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      let toolCalls = {}; // index -> {name, arguments}
-      let reasoning = ""; // DeepSeek 思考模式：reasoning_content 需原样回传
+      let continuedData = [];
+      let reasoning = "";
       let streamEnded = false;
+      let finishedChoice = false;
 
-      while (!streamEnded) {
-        const { done, value } = await wait(reader.read());
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let idx;
-        while ((idx = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 1);
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data:")) continue;
-          const data = trimmed.slice(5).trim();
-          if (data === "[DONE]") {
-            streamEnded = true;
-            break;
-          }
-          let json;
-          try {
-            json = JSON.parse(data);
-          } catch (e) {
-            continue;
-          }
-          const choice = json.choices && json.choices[0];
-          if (!choice) continue;
-          const delta = choice.delta || {};
-          if (delta.reasoning_content) reasoning += delta.reasoning_content;
-          if (delta.content) onDelta(delta.content);
-          if (delta.tool_calls) {
-            for (const tc of delta.tool_calls) {
-              const i = tc.index || 0;
-              toolCalls[i] = toolCalls[i] || { name: "", arguments: "" };
-              if (tc.function) {
-                if (tc.function.name) toolCalls[i].name += tc.function.name;
-                if (tc.function.arguments)
-                  toolCalls[i].arguments += tc.function.arguments;
-              }
-            }
-          }
+      function acceptEvent(json) {
+        if (json?.error) throw new Error(t("chat.providerFailed"));
+        const choice = json?.choices?.[0];
+        if (!choice) return; // Optional usage and heartbeat events.
+        const delta = choice.delta || {};
+        if (Array.isArray(delta.tool_calls) && delta.tool_calls.length)
+          throw new Error(t("search.unexpectedTool"));
+        if (typeof delta.reasoning_content === "string")
+          reasoning += delta.reasoning_content;
+        if (typeof delta.content === "string") onDelta(delta.content);
+        if (choice.finish_reason) {
+          if (["length", "content_filter"].includes(choice.finish_reason))
+            throw new Error(t("chat.incomplete"));
+          if (["tool_calls", "function_call"].includes(choice.finish_reason))
+            throw new Error(t("search.unexpectedTool"));
+          finishedChoice = true;
         }
       }
-      const calls = Object.keys(toolCalls)
-        .sort((a, b) => a - b)
-        .map((k) => ({
-          name: toolCalls[k].name,
-          arguments: toolCalls[k].arguments,
-        }));
-      return { toolCalls: calls, reasoning };
+      function acceptLine(line) {
+        if (streamEnded) return;
+        const trimmed = line.trim();
+        if (!trimmed && continuedData.length) {
+          let event;
+          try {
+            event = JSON.parse(continuedData.join("\n"));
+          } catch {
+            throw new Error(t("chat.invalidStream"));
+          }
+          continuedData = [];
+          acceptEvent(event);
+        }
+        if (!trimmed.startsWith("data:")) return;
+        const data = trimmed.slice(5).trim();
+        if (!data) return;
+        if (continuedData.length) {
+          continuedData.push(data);
+          return;
+        }
+        if (data === "[DONE]") {
+          streamEnded = true;
+          return;
+        }
+        let event;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          // The SSE format permits JSON to span multiple data fields.
+          continuedData.push(data);
+          return;
+        }
+        acceptEvent(event);
+      }
+      const readLines = client.createSSELineReader(acceptLine);
+      while (!streamEnded) {
+        const { done, value } = await wait(reader.read());
+        readLines(decoder.decode(value, { stream: !done }), done);
+        if (done) {
+          acceptLine("");
+          break;
+        }
+      }
+      // Some compatible providers close after finish_reason instead of [DONE].
+      if (!streamEnded && !finishedChoice)
+        throw new Error(t("chat.incomplete"));
+      return reasoning;
     } finally {
       signal.removeEventListener("abort", abort);
       if (reader) {
@@ -1465,7 +1509,16 @@
 
   /* ---------- Chat completions / native search ---------- */
   async function send(questionText) {
-    if (busy || readingImages || settingsOpen()) return;
+    if (busy || imageBatches.length || settingsOpen()) return;
+    if (activeSession?.pendingReply) {
+      setStatusKey("chat.sendingElsewhere");
+      return;
+    }
+    syncHistory();
+    if (settingsSnapshot !== window.AskGPTSettings.snapshot(Zotero.Prefs)) {
+      setStatusKey("settings.changedElsewhere");
+      return;
+    }
     if (paperLoading) {
       setStatusKey("context.wait");
       return;
@@ -1535,24 +1588,29 @@
     setStatusKey("chat.thinking");
 
     controller = new AbortController();
+    if (activeSession) activeSession.pendingReply = controller;
 
     // 追加本次问题（不动前缀，保持缓存命中）。
     // 选中段落作为「焦点」随问题一起发，全文仍在前缀里。
     const userContent = focus ? t("prompt.focus", { focus, question: q }) : q;
-    messages.push({
-      role: "user",
-      content: sentImages.length
-        ? [
-            { type: "text", text: userContent },
-            ...sentImages.map((image) => ({
-              type: "image_url",
-              image_url: { url: image.url },
-            })),
-          ]
-        : userContent,
-      q,
-      focus: focus || undefined,
-    });
+    // Keep unfinished questions private to this frame until the turn ends.
+    messages = [
+      ...messages,
+      {
+        role: "user",
+        content: sentImages.length
+          ? [
+              { type: "text", text: userContent },
+              ...sentImages.map((image) => ({
+                type: "image_url",
+                image_url: { url: image.url },
+              })),
+            ]
+          : userContent,
+        q,
+        focus: focus || undefined,
+      },
+    ];
 
     // 整个对话流程共用一个 assistant 气泡，避免工具轮产生空消息
     let ui = null;
@@ -1561,6 +1619,28 @@
     let citations = [];
     let searched = false;
     let searchCount = 0;
+    const interruptedHistory = () =>
+      acc
+        ? [
+            ...messages,
+            {
+              role: "assistant",
+              content: acc,
+              ...(accReasoning ? { reasoning_content: accReasoning } : {}),
+              citations,
+              searched,
+              searchCount,
+            },
+          ]
+        : messages;
+    const commitTurn = (history) => {
+      if (activeSession?.pendingReply !== controller) return;
+      activeSession.history = history;
+      delete activeSession.pendingReply;
+      persistSessionBase();
+    };
+    // Gecko can destroy the frame before an aborted fetch reaches its finally.
+    preservePendingTurn = () => commitTurn(interruptedHistory());
     let rafId = null;
     let lastStreamRender = 0;
     const renderAcc = () => {
@@ -1639,7 +1719,7 @@
         searchCount = result.searchCount;
         ensureBubble();
       } else {
-        const result = await streamChat(
+        accReasoning = await streamChat(
           {
             model: config.model,
             temperature: clampNum(el.setTemp.value, 0, 2, 0.3),
@@ -1649,9 +1729,6 @@
           onDelta,
           controller.signal,
         );
-        accReasoning = result.reasoning;
-        if (result.toolCalls.length)
-          throw new Error(t("search.unexpectedTool"));
         if (!acc.trim()) throw new Error(t("search.emptyAnswer"));
       }
       finishRender();
@@ -1660,7 +1737,6 @@
       if (el.setWeb.checked)
         Object.assign(finalMsg, { citations, searched, searchCount });
       messages.push(finalMsg);
-      persistSession();
       if (el.setWeb.checked)
         setStatusKey(searched ? "search.used" : "search.notUsed");
       else setStatus("");
@@ -1670,13 +1746,7 @@
         // 保留已输出的内容，移除游标
         finishRender();
         // 停止也保存已有内容
-        if (acc) {
-          const stopMsg = { role: "assistant", content: acc };
-          if (accReasoning) stopMsg.reasoning_content = accReasoning;
-          Object.assign(stopMsg, { citations, searched, searchCount });
-          messages.push(stopMsg);
-        }
-        persistSession();
+        messages = interruptedHistory();
       } else {
         finishRender();
         if (ui) ui.wrap.classList.add("incomplete");
@@ -1686,17 +1756,20 @@
           imageHint: hasImages ? t("image.errorHint") : "",
         });
         if (Zotero && Zotero.logError) Zotero.logError(new Error(message));
-        persistSession();
       }
     } finally {
       busy = false;
+      preservePendingTurn = null;
+      commitTurn(messages);
+      syncHistory();
+      controller = null;
       el.btnSend.disabled = false;
       el.btnSend.textContent = t("chat.send");
       el.btnStop.classList.add("hidden");
       el.btnSettings.disabled = false;
       $("btn-new").disabled = false;
       $("btn-attach").disabled = false;
-      if (queuedRefresh) {
+      if (queuedRefresh != null) {
         const next = queuedRefresh;
         queuedRefresh = null;
         refresh(next);
@@ -1714,9 +1787,15 @@
   }
 
   /* ---------- 存为 Zotero 笔记 ---------- */
+  const pendingNoteSaves = new WeakSet();
   // 取最后一条 AI 回答（.msg.assistant .bubble 的纯文本）与其对应问题，
   // 组装成 HTML 笔记（标题 h1 + 正文 p，换行转 <br/>），存为选中条目的子笔记或独立笔记。
-  async function saveLastAnswerAsNote() {
+  async function saveLastAnswerAsNote(event) {
+    if (event?.detail > 1) return;
+    if (paperLoading) {
+      setStatusKey("context.wait");
+      return;
+    }
     const z = getZotero();
     if (!z) {
       setStatusKey("note.noZotero");
@@ -1730,6 +1809,8 @@
       setStatusKey("note.noAnswer");
       return;
     }
+    const conversation = activeSession || lastAssistant;
+    if (pendingNoteSaves.has(conversation)) return;
     const bubble = lastAssistant.querySelector(".bubble");
     const answer = stripControl(bubble ? bubble.textContent : "").trim();
     if (!answer) {
@@ -1784,35 +1865,60 @@
         "</ul>";
     }
 
+    const showResult = (key, variables) => {
+      if (!paperLoading && el.messages.contains(lastAssistant))
+        setStatusKey(key, variables);
+    };
+    pendingNoteSaves.add(conversation);
     try {
-      const pane = z.getActiveZoteroPane();
-      const items = pane ? pane.getSelectedItems() : [];
+      const source = noteTarget && z.Items.get(noteTarget.itemID);
+      if (
+        noteTarget &&
+        (!source || source.deleted || source.libraryID !== noteTarget.libraryID)
+      ) {
+        setStatusKey("note.sourceUnavailable");
+        return;
+      }
+      const parent = source?.isRegularItem() ? source : source?.parentItem;
+      if (
+        (source?.parentID && !parent) ||
+        (parent && (parent.deleted || parent.libraryID !== source.libraryID))
+      ) {
+        setStatusKey("note.sourceUnavailable");
+        return;
+      }
+      const libraryID = source?.libraryID ?? z.Libraries.userLibraryID;
+      const library = z.Libraries.get(libraryID);
+      if (!library) {
+        setStatusKey("note.sourceUnavailable");
+        return;
+      }
+      if (!library.editable) {
+        setStatusKey("note.readOnly");
+        return;
+      }
       const note = new z.Item("note");
-      if (items.length) {
-        // 存为选中条目（任意类型）的子笔记
-        const parent = items[0];
-        note.libraryID = parent.libraryID;
-        note.parentID = parent.id;
-        note.setNote(html);
-        await note.saveTx();
+      note.libraryID = libraryID;
+      if (parent) note.parentID = parent.id;
+      note.setNote(html);
+      await note.saveTx();
+      if (parent) {
         let parentTitle = String(parent.id);
         try {
           const t = parent.getDisplayTitle ? parent.getDisplayTitle() : null;
           parentTitle = t || parent.getField("title") || parent.id;
         } catch (e) {}
-        setStatusKey("note.savedParent", { title: parentTitle });
+        showResult("note.savedParent", { title: parentTitle });
       } else {
-        // 无选中条目：存为本文库独立笔记
-        note.libraryID = z.Libraries.userLibraryID;
-        note.setNote(html);
-        await note.saveTx();
-        setStatusKey("note.saved");
+        showResult("note.saved");
       }
     } catch (e) {
-      setStatusKey("note.error", { message: (e && e.message) || e });
+      showResult("note.error", { message: (e && e.message) || e });
       try {
         z.logError(e);
       } catch (e2) {}
+    } finally {
+      pendingNoteSaves.delete(conversation);
     }
   }
 
@@ -1827,14 +1933,14 @@
   function clearConversation() {
     if (busy) return;
     clearAttachments();
-    el.messages.innerHTML = "";
-    el.emptyTip.style.display = "";
-    messages = [];
+    renderHistory([]);
     sessionBase = null;
-    // 同步清主进程会话（该文章的缓存重置）
-    const g = getAskGPT();
-    if (g && g.data && g.data.sessions && sessionKey) {
-      delete g.data.sessions[sessionKey];
+    sessionBaseText = "";
+    if (activeSession) {
+      activeSession.pendingReply?.abort();
+      delete activeSession.pendingReply;
+      activeSession.history = messages;
+      persistSessionBase();
     }
     setStatus("");
   }
@@ -1852,7 +1958,6 @@
       if (newSel === (focusSel || "").trim()) return;
       focusSel = newSel;
       updateContextBadges();
-      persistSession();
       setStatus("");
     } catch (e) {}
   }
@@ -1875,7 +1980,6 @@
       if (text === (focusSel || "").trim()) return;
       focusSel = text;
       updateContextBadges();
-      persistSession();
     } catch (e) {}
   }
 
@@ -1956,6 +2060,7 @@
       addImages(event.target.files),
     );
     el.input.addEventListener("paste", (event) => {
+      if (busy) return;
       const files = Array.from(event.clipboardData?.items || [])
         .filter(
           (item) => item.kind === "file" && item.type.startsWith("image/"),
@@ -1995,7 +2100,6 @@
       el.focusClear.addEventListener("click", () => {
         focusSel = "";
         updateContextBadges();
-        persistSession();
       });
     }
     if (el.btnClearErr) {
@@ -2006,6 +2110,7 @@
     }
     // iframe 尺寸变化（主窗口拖右下角把手 / 设置里改面板大小）→ 重新判定适配档位
     if (typeof window.addEventListener === "function") {
+      window.addEventListener("focus", syncHistory);
       window.addEventListener("resize", () => {
         syncViewportClasses();
         updateContextBadges();
@@ -2025,6 +2130,20 @@
     });
     // Esc：设置开着时只关设置；否则隐藏整个面板
     document.addEventListener("keydown", (ev) => {
+      if (
+        (ev.ctrlKey || ev.metaKey) &&
+        !ev.altKey &&
+        !ev.shiftKey &&
+        !ev.isComposing &&
+        !ev.defaultPrevented &&
+        ev.key?.toLowerCase() === "k" &&
+        !settingsOpen()
+      ) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (!ev.repeat) el.input.focus();
+        return;
+      }
       if (ev.key !== "Escape") return;
       if (settingsOpen()) {
         ev.preventDefault();
@@ -2067,16 +2186,18 @@
       maxW: PANEL_W_MAX,
       maxH: PANEL_H_MAX,
     },
-    // 调试用：渲染器是否就绪（markdown-it / KaTeX 是否加载成功）
-    rendererReady() {
-      const R = window.AskGPTRender;
-      return R && R.ready ? R.ready : { markdown: false, katex: false };
-    },
   };
 
   // 启动
   document.addEventListener("DOMContentLoaded", () => {
-    window.addEventListener("unload", cancelRequests, { once: true });
+    window.addEventListener(
+      "unload",
+      () => {
+        cancelRequests();
+        preservePendingTurn?.();
+      },
+      { once: true },
+    );
     // 任何未捕获异常 / Promise 拒绝都记录（含阶段与堆栈），方便远程定位
     window.addEventListener("error", (ev) => {
       reportPanelError(

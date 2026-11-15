@@ -51,16 +51,35 @@ describe("AskGPT settings and image interaction", function () {
     assert.isTrue(predicate(), message);
   }
 
-  function makeImage() {
+  function makeImage(name = "figure.png") {
     return new File(
       [
         Uint8Array.from(testWindow.atob(pngData), (character) =>
           character.charCodeAt(0),
         ),
       ],
-      "figure.png",
+      name,
       { type: "image/png" },
     );
+  }
+
+  function delayedImages() {
+    const reads = new Map<string, { finish: () => void; cancel: () => void }>();
+    class Reader {
+      result = "";
+      onload = () => {};
+      onabort = () => {};
+      readAsDataURL(file: File) {
+        reads.set(file.name, {
+          finish: () => {
+            this.result = "data:image/png;base64," + pngData;
+            this.onload();
+          },
+          cancel: () => this.onabort(),
+        });
+      }
+    }
+    return { Reader, reads };
   }
 
   function jsonResponse(body: unknown) {
@@ -183,6 +202,7 @@ describe("AskGPT settings and image interaction", function () {
     prompt: boolean | string = false,
     legacySearch = false,
     realRenderer = false,
+    imageReader: new () => any = FileReader,
   ) {
     // The real XHTML controls and scripts run against isolated host services.
     // No real Zotero preference, session, browser window, or network is used.
@@ -203,17 +223,23 @@ describe("AskGPT settings and image interaction", function () {
     else if (typeof prompt === "string")
       prefs.set(prefix + "systemPrompt", prompt);
     if (legacySearch) prefs.delete(prefix + "nativeSearch");
+    const globalPrefs = new Map<string, unknown>();
     const writes: Array<[string, unknown]> = [];
     const requests: any[] = [];
     const logs: unknown[] = [];
     const notes: string[] = [];
+    const noteDestinations: Array<[number, number | undefined]> = [];
+    const libraryItems = new Map<number, any>();
     const launchedURLs: string[] = [];
     const hiddenWindows: any[] = [];
     const windowListeners = new Map<string, Array<(event: any) => void>>();
     const host = {
       locale: "zh-CN",
       Prefs: {
-        get: (name: string) => prefs.get(name),
+        get: (name: string, global = false) =>
+          (global ? globalPrefs : prefs).get(name),
+        clear: (name: string, global = false) =>
+          (global ? globalPrefs : prefs).delete(name),
         set: (name: string, value: unknown) => {
           writes.push([name, value]);
           prefs.set(name, value);
@@ -226,15 +252,21 @@ describe("AskGPT settings and image interaction", function () {
       logError: (error: unknown) => logs.push(error),
       launchURL: (url: string) => launchedURLs.push(url),
       getActiveZoteroPane: () => ({ getSelectedItems: () => [] }),
-      Libraries: { userLibraryID: 1 },
+      Libraries: {
+        userLibraryID: 1,
+        get: (_id: number) => ({ editable: true }),
+      },
+      Items: { get: (id: number) => libraryItems.get(id) },
       Item: class {
         libraryID = 0;
+        parentID?: number;
         private html = "";
         setNote(html: string) {
           this.html = html;
         }
         async saveTx() {
           notes.push(this.html);
+          noteDestinations.push([this.libraryID, this.parentID]);
         }
       },
     };
@@ -283,7 +315,7 @@ describe("AskGPT settings and image interaction", function () {
       navigator: fakeWindow.navigator,
       URL,
       AbortController,
-      FileReader,
+      FileReader: imageReader,
       DOMParser,
       TextDecoder,
       NodeFilter: {
@@ -321,7 +353,14 @@ describe("AskGPT settings and image interaction", function () {
         load(path);
       }
     }
-    for (const path of ["prompts", "i18n", "client", "native-search", "popup"])
+    for (const path of [
+      "prompts",
+      "settings",
+      "i18n",
+      "client",
+      "native-search",
+      "popup",
+    ])
       load(`scripts/${path}.js`);
     doc.dispatchEvent(event(doc, "DOMContentLoaded"));
     const get = (id: string) => doc.getElementById(id) as any;
@@ -330,8 +369,7 @@ describe("AskGPT settings and image interaction", function () {
       get(id).value = value;
       get(id).dispatchEvent(event(doc, "input"));
     };
-    async function attach(paste = false) {
-      const file = makeImage();
+    function selectImage(file: File, paste = false) {
       if (paste) {
         const pasted = event(doc, "paste");
         Object.defineProperty(pasted, "clipboardData", {
@@ -350,6 +388,9 @@ describe("AskGPT settings and image interaction", function () {
         });
         get("image-input").dispatchEvent(event(doc, "change"));
       }
+    }
+    async function attach(paste = false) {
+      selectImage(makeImage(), paste);
       await until(
         () => !get("btn-send").disabled,
         "Image loading should finish",
@@ -359,10 +400,13 @@ describe("AskGPT settings and image interaction", function () {
     return {
       doc,
       prefs,
+      globalPrefs,
       writes,
       requests,
       logs,
       notes,
+      libraryItems,
+      noteDestinations,
       launchedURLs,
       hiddenWindows,
       hostWindow,
@@ -376,6 +420,7 @@ describe("AskGPT settings and image interaction", function () {
       click,
       input,
       attach,
+      selectImage,
       i18n: fakeWindow.AskGPTI18n,
       popup: fakeWindow.AskGPTPopup,
       setTransport: (next: typeof transport) => {
@@ -440,8 +485,132 @@ describe("AskGPT settings and image interaction", function () {
     );
     assert.equal(ui.prefs.get(prefix + "apiKey"), "draft-test-key");
     assert.equal(ui.prefs.get(prefix + "model"), "vision-model");
-    assert.equal(ui.prefs.get(prefix + "temperature"), 0);
+    assert.equal(ui.prefs.get(prefix + "temperature"), "0");
     assert.isTrue(ui.get("settings").classList.contains("hidden"));
+  });
+
+  it("keeps credentials on the same origin and omits the old key when a draft switches providers", async function () {
+    const ui = harness();
+    ui.click("btn-settings");
+    ui.input("set-base", "https://SAVED.example.test:443/research");
+    ui.click("btn-fetch-models");
+    await until(
+      () => !ui.get("btn-fetch-models").disabled,
+      "Same-origin discovery finished",
+    );
+    assert.equal(ui.requests[0].headers.Authorization, "Bearer saved-test-key");
+    ui.input("set-base", "https://draft.example.test/v1");
+    ui.click("btn-fetch-models");
+    await until(
+      () => !ui.get("btn-fetch-models").disabled,
+      "New-origin discovery finished",
+    );
+    assert.equal(ui.requests[1].url, "https://draft.example.test/v1/models");
+    assert.notProperty(ui.requests[1].headers, "Authorization");
+    assert.equal(ui.get("set-key").value, "");
+    ui.setTransport(async () =>
+      jsonResponse({
+        choices: [{ message: { role: "assistant", content: "OK" } }],
+      }),
+    );
+    ui.click("btn-test-connection");
+    await until(
+      () => !ui.get("btn-test-connection").disabled,
+      "New-origin connection test finished",
+    );
+    assert.notProperty(ui.requests[2].headers, "Authorization");
+    assert.equal(ui.prefs.get(prefix + "apiKey"), "saved-test-key");
+    ui.click("btn-save");
+    assert.equal(ui.prefs.get(prefix + "apiKey"), "");
+  });
+
+  it("allows typing a key for the new provider, including deliberately reusing the same value", async function () {
+    const ui = harness();
+    ui.click("btn-settings");
+    ui.input("set-base", "http://127.0.0.1:8081/v1");
+    ui.input("set-key", "saved-test-key");
+    ui.click("btn-fetch-models");
+    await until(
+      () => !ui.get("btn-fetch-models").disabled,
+      "Local discovery finished",
+    );
+    assert.equal(ui.requests[0].headers.Authorization, "Bearer saved-test-key");
+    ui.input("set-base", "http://127.0.0.1:8082/v1");
+    ui.click("btn-save");
+    assert.equal(ui.prefs.get(prefix + "apiKey"), "");
+  });
+
+  it("saves fractional temperature over a legacy integer and clears the old duplicate key on explicit save", function () {
+    const ui = harness();
+    ui.prefs.set(prefix + "temperature", 1);
+    ui.globalPrefs.set(prefix + "apiKey", "old-native-credential");
+    ui.click("btn-settings");
+    assert.equal(ui.get("set-temp").value, "1");
+    assert.equal(ui.get("set-key").value, "saved-test-key");
+    assert.isTrue(ui.globalPrefs.has(prefix + "apiKey"));
+    ui.input("set-temp", "0.35");
+    ui.input("set-key", "");
+    ui.click("btn-save");
+    assert.equal(ui.prefs.get(prefix + "temperature"), "0.35");
+    assert.equal(ui.prefs.get(prefix + "apiKey"), "");
+    assert.isFalse(ui.globalPrefs.has(prefix + "apiKey"));
+    ui.click("btn-settings");
+    assert.equal(ui.get("set-temp").value, "0.35");
+    assert.equal(ui.get("set-key").value, "");
+  });
+
+  it("returns to the same question box on Ctrl/Cmd+K without sending its draft", function () {
+    const ui = harness();
+    const input = ui.get("input");
+    let focused = 0;
+    input.focus = () => {
+      focused++;
+    };
+    ui.input("input", "Unsent question");
+    for (const modifier of ["ctrlKey", "metaKey"]) {
+      const shortcut = event(ui.doc, "keydown");
+      Object.defineProperties(shortcut, {
+        key: { value: "k" },
+        [modifier]: { value: true },
+      });
+      input.dispatchEvent(shortcut);
+      assert.isTrue(shortcut.defaultPrevented);
+    }
+    assert.equal(focused, 2);
+    assert.equal(input.value, "Unsent question");
+    assert.isEmpty(ui.requests);
+  });
+
+  it("does not reuse a stale provider after another window changes settings", function () {
+    const ui = harness();
+    ui.popup.refresh({
+      contextText: "Paper context",
+      session: { key: "paper", history: [] },
+    });
+    ui.input("input", "Describe the result.");
+    ui.prefs.set(prefix + "apiKey", "rotated-fixture-key");
+    ui.click("btn-send");
+    assert.isEmpty(ui.requests);
+    assert.equal(
+      ui.get("statusline").textContent,
+      ui.i18n.t("settings.changedElsewhere"),
+    );
+
+    ui.click("btn-settings");
+    assert.equal(ui.get("set-key").value, "rotated-fixture-key");
+    ui.prefs.set(prefix + "apiKey", "");
+    ui.click("btn-test-connection");
+    assert.isEmpty(ui.requests);
+    ui.click("btn-save");
+    assert.equal(
+      ui.get("save-status").textContent,
+      ui.i18n.t("settings.changedElsewhere"),
+    );
+    assert.equal(ui.prefs.get(prefix + "apiKey"), "");
+    assert.isEmpty(ui.writes);
+    ui.click("btn-settings-close2");
+    ui.click("btn-settings");
+    assert.equal(ui.get("set-key").value, "");
   });
 
   it("cancels pending discovery and discards unsaved edits", async function () {
@@ -520,6 +689,8 @@ describe("AskGPT settings and image interaction", function () {
     await ui.attach(true);
     await ui.popup.send("Explain the figure.");
     assert.lengthOf(ui.requests, 1);
+    assert.equal(ui.requests[0].credentials, "omit");
+    assert.equal(ui.requests[0].referrerPolicy, "no-referrer");
     const first = JSON.parse(ui.requests[0].body);
     const user = first.messages[first.messages.length - 1];
     assert.deepEqual(user, {
@@ -551,6 +722,133 @@ describe("AskGPT settings and image interaction", function () {
     );
     assert.isTrue(ui.get("attachments").classList.contains("hidden"));
     assert.lengthOf(ui.logs, 0);
+  });
+
+  it("keeps successive image pastes in order and continues after a cancelled read", async function () {
+    const { Reader, reads } = delayedImages();
+    const ui = harness(false, false, false, Reader);
+    for (const name of ["first", "cancelled", "last"]) {
+      ui.selectImage(makeImage(name), true);
+    }
+    assert.isTrue(ui.get("btn-send").disabled);
+    reads.get("first")!.finish();
+    await until(() => reads.has("cancelled"), "Second paste should be read");
+    reads.get("cancelled")!.cancel();
+    await until(() => reads.has("last"), "Third paste should be read");
+    reads.get("last")!.finish();
+    await until(() => !ui.get("btn-send").disabled, "Pastes should finish");
+    assert.deepEqual(
+      Array.from(ui.doc.querySelectorAll(".attachment-preview img"), (img) =>
+        img.getAttribute("alt"),
+      ),
+      ["first", "last"],
+    );
+  });
+
+  it("accepts a new image immediately after switching paper or clearing a draft", async function () {
+    for (const reset of ["paper", "draft"]) {
+      const { Reader, reads } = delayedImages();
+      const ui = harness(false, false, false, Reader);
+      ui.popup.refresh({ session: { key: "paper-a", history: [] } });
+      ui.selectImage(makeImage("old"));
+      if (reset === "paper") {
+        ui.popup.refresh({ session: { key: "paper-b", history: [] } });
+      } else {
+        ui.popup.clearConversation();
+      }
+      assert.isFalse(ui.get("btn-send").disabled, reset);
+      ui.selectImage(makeImage("new"), true);
+      assert.isTrue(reads.has("new"), reset);
+      reads.get("old")!.finish();
+      await new Promise((resolve) => testWindow.setTimeout(resolve, 0));
+      assert.isTrue(ui.get("btn-send").disabled, reset);
+      assert.isEmpty(ui.doc.querySelectorAll(".attachment-preview"), reset);
+      reads.get("new")!.finish();
+      await until(
+        () => !ui.get("btn-send").disabled,
+        "New draft should finish",
+      );
+      assert.equal(
+        ui.doc.querySelector(".attachment-preview img")?.getAttribute("alt"),
+        "new",
+        reset,
+      );
+    }
+  });
+
+  it("counts queued image selections against the same draft's attachment limit", async function () {
+    const { Reader, reads } = delayedImages();
+    const ui = harness(false, false, false, Reader);
+    for (let index = 1; index <= 5; index++) {
+      ui.selectImage(makeImage(String(index)));
+    }
+    for (let index = 1; index <= 4; index++) {
+      const name = String(index);
+      await until(() => reads.has(name), "Accepted images should all be read");
+      reads.get(name)!.finish();
+    }
+    await until(() => !ui.get("btn-send").disabled, "Draft should be ready");
+    assert.isFalse(reads.has("5"));
+    assert.lengthOf(ui.doc.querySelectorAll(".attachment-preview"), 4);
+  });
+
+  it("keeps a figure selected while its paper loads, including a read that finishes later", async function () {
+    const { Reader, reads } = delayedImages();
+    const ui = harness(false, false, false, Reader);
+    ui.popup.refresh({ loading: true, source: "paper-a", session: null });
+    ui.selectImage(makeImage("ready"));
+    reads.get("ready")!.finish();
+    await until(
+      () => !ui.get("btn-send").disabled,
+      "First image should be ready",
+    );
+    ui.selectImage(makeImage("still-reading"), true);
+    ui.popup.refresh({
+      source: "paper-a",
+      session: { key: "attachment-a", history: [] },
+    });
+    assert.isTrue(ui.get("btn-send").disabled);
+    reads.get("still-reading")!.finish();
+    await until(
+      () => !ui.get("btn-send").disabled,
+      "Second image should be ready",
+    );
+    assert.deepEqual(
+      Array.from(ui.doc.querySelectorAll(".attachment-preview img"), (img) =>
+        img.getAttribute("alt"),
+      ),
+      ["ready", "still-reading"],
+    );
+  });
+
+  it("discards pictures from a previous loading paper when the reader changes again", async function () {
+    const { Reader, reads } = delayedImages();
+    const ui = harness(false, false, false, Reader);
+    ui.popup.refresh({ source: "paper-a", session: { key: "a", history: [] } });
+    ui.selectImage(makeImage("old-draft"));
+    reads.get("old-draft")!.finish();
+    await until(
+      () => !ui.get("btn-send").disabled,
+      "Original draft should be ready",
+    );
+    ui.popup.refresh({ loading: true, source: "paper-b", session: null });
+    assert.isEmpty(ui.doc.querySelectorAll(".attachment-preview"));
+    ui.selectImage(makeImage("intermediate"));
+    ui.popup.refresh({ loading: true, source: "paper-c", session: null });
+    ui.selectImage(makeImage("current"));
+    reads.get("intermediate")!.finish();
+    reads.get("current")!.finish();
+    await until(
+      () => !ui.get("btn-send").disabled,
+      "Current draft should be ready",
+    );
+    ui.popup.refresh({ source: "paper-c", session: { key: "c", history: [] } });
+    assert.deepEqual(
+      Array.from(ui.doc.querySelectorAll(".attachment-preview img"), (img) =>
+        img.getAttribute("alt"),
+      ),
+      ["current"],
+    );
   });
 
   it("does not send images to a model explicitly declaring text-only input", async function () {
@@ -970,6 +1268,127 @@ describe("AskGPT settings and image interaction", function () {
     assert.equal(ui.doc.querySelectorAll(".answer-sources a").length, 0);
   });
 
+  it("saves under the source attachment's paper even if another window gains focus", async function () {
+    const ui = harness();
+    const parent = { id: 12, libraryID: 8 };
+    ui.libraryItems.set(13, {
+      id: 13,
+      libraryID: 8,
+      parentItem: parent,
+      isRegularItem: () => false,
+    });
+    ui.popup.refresh({
+      session: {
+        key: "source-paper",
+        noteTarget: { itemID: 13, libraryID: 8 },
+        history: [
+          { role: "user", content: "question" },
+          { role: "assistant", content: "answer" },
+        ],
+      },
+    });
+    ui.host.getActiveZoteroPane = () => {
+      throw new Error("unrelated active window");
+    };
+    await ui.popup.saveNote();
+    assert.deepEqual(ui.noteDestinations, [[8, 12]]);
+    ui.libraryItems.delete(13);
+    await ui.popup.saveNote();
+    assert.lengthOf(
+      ui.notes,
+      1,
+      "a removed source must not redirect the note to another library",
+    );
+  });
+
+  it("saves a double click once and keeps a late save result on its original paper", async function () {
+    const ui = harness();
+    const showPaper = (id: number) => {
+      ui.libraryItems.set(id, {
+        id,
+        libraryID: 8,
+        isRegularItem: () => true,
+        getDisplayTitle: () => "Paper " + id,
+      });
+      ui.popup.refresh({
+        session: {
+          key: "paper-" + id,
+          noteTarget: { itemID: id, libraryID: 8 },
+          history: [
+            { role: "user", content: "question " + id },
+            { role: "assistant", content: "answer " + id },
+          ],
+        },
+      });
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const original = ui.host.Item.prototype.saveTx;
+    ui.host.Item.prototype.saveTx = async function () {
+      if (this.parentID === 11) await gate;
+      await original.call(this);
+    };
+    showPaper(11);
+    const pending = ui.popup.saveNote();
+    ui.click("askgpt-save-btn");
+    showPaper(22);
+    await ui.popup.saveNote();
+    release();
+    await pending;
+    assert.deepEqual(ui.noteDestinations, [
+      [8, 22],
+      [8, 11],
+    ]);
+    assert.include(ui.get("statusline").textContent, "Paper 22");
+    assert.include(ui.notes[0], "answer 22");
+    assert.include(ui.notes[1], "answer 11");
+    const secondClick = event(ui.doc, "click");
+    Object.defineProperty(secondClick, "detail", { value: 2 });
+    ui.get("askgpt-save-btn").dispatchEvent(secondClick);
+    await Promise.resolve();
+    assert.lengthOf(
+      ui.notes,
+      2,
+      "A double click must save once even on a fast database",
+    );
+    await ui.popup.saveNote();
+    assert.lengthOf(ui.notes, 3, "A later deliberate save remains available");
+  });
+
+  it("keeps notes out of read-only libraries and does not silently detach an orphaned source", async function () {
+    const ui = harness();
+    const source = {
+      id: 12,
+      libraryID: 8,
+      parentID: 10,
+      parentItem: undefined as any,
+      isRegularItem: () => false,
+    };
+    ui.libraryItems.set(source.id, source);
+    ui.popup.refresh({
+      session: {
+        key: "paper-12",
+        noteTarget: { itemID: source.id, libraryID: source.libraryID },
+        history: [{ role: "assistant", content: "answer" }],
+      },
+    });
+    await ui.popup.saveNote();
+    assert.isEmpty(ui.notes);
+    source.parentItem = { id: 10, libraryID: 8, deleted: true };
+    await ui.popup.saveNote();
+    assert.isEmpty(ui.notes);
+    source.parentItem.deleted = false;
+    ui.host.Libraries.get = (id) => ({ editable: id !== 8 });
+    await ui.popup.saveNote();
+    assert.isEmpty(ui.notes);
+    assert.match(ui.get("statusline").textContent, /只读|read.only/i);
+    ui.host.Libraries.get = () => ({ editable: true });
+    await ui.popup.saveNote();
+    assert.deepEqual(ui.noteDestinations, [[8, 10]]);
+  });
+
   it("renders safe citations, restores them from history, and preserves them in a saved note", async function () {
     const ui = harness(false, false, true);
     const safeURL = 'https://sources.example.test/paper?a="quoted"&b=2';
@@ -1095,6 +1514,47 @@ describe("AskGPT settings and image interaction", function () {
       assert.notProperty(message, "citations");
   });
 
+  it("keeps non-web links inert and lets the reader choose whether to load external figures", function () {
+    const ui = harness(false, false, true);
+    ui.popup.refresh({
+      session: {
+        key: "paper-a",
+        history: [
+          {
+            role: "assistant",
+            content:
+              "[relative](other.xhtml) [paper](https://example.test/paper) ![Plate 1](https://example.test/figure.png)",
+          },
+        ],
+      },
+    });
+    const bubble = ui.doc.querySelector(".msg.assistant .bubble")!;
+    assert.isNull(bubble.querySelector("img"));
+    assert.lengthOf(bubble.querySelectorAll("a[href]"), 1);
+    assert.equal(
+      bubble.querySelector("a[href]")!.getAttribute("href"),
+      "https://example.test/paper",
+    );
+    const figure = bubble.querySelector("button[data-askgpt-image]")!;
+    assert.include(figure.textContent, "Plate 1");
+    // The fixture uses an inert, detached document; this does not fetch a picture.
+    figure.dispatchEvent(event(ui.doc, "click"));
+    assert.equal(
+      bubble.querySelector("img")!.getAttribute("src"),
+      "https://example.test/figure.png",
+    );
+    const image = bubble.querySelector("img")!;
+    assert.equal(image.getAttribute("alt"), "Plate 1");
+    assert.equal(image.crossOrigin, "anonymous");
+    assert.equal(image.referrerPolicy, "no-referrer");
+    image.dispatchEvent(event(ui.doc, "error"));
+    const fallback = bubble.querySelector<HTMLAnchorElement>("a.source-link")!;
+    assert.equal(fallback.href, "https://example.test/figure.png");
+    assert.isEmpty(ui.launchedURLs);
+    fallback.dispatchEvent(event(ui.doc, "click"));
+    assert.deepEqual(ui.launchedURLs, ["https://example.test/figure.png"]);
+  });
+
   it("saves an earlier answer with its own question after a later request fails", async function () {
     const ui = harness();
     ui.popup.refresh({
@@ -1120,6 +1580,30 @@ describe("AskGPT settings and image interaction", function () {
       "FAILED_SECOND_QUESTION",
     );
     assert.include(note.body.textContent || "", "A test answer.");
+  });
+
+  it("keeps private provider error bodies out of the chat and Zotero log", async function () {
+    const ui = harness();
+    ui.popup.refresh({
+      contextText: "An example paper.",
+      session: { key: "paper-a", history: [] },
+    });
+    let readBody = false;
+    ui.setTransport(async () => ({
+      ok: false,
+      status: 401,
+      text: async () => {
+        readBody = true;
+        return "Private provider diagnostic text";
+      },
+    }));
+    await ui.popup.send("Question about the paper");
+    assert.isFalse(readBody);
+    assert.include(ui.get("statusline").textContent, "401");
+    assert.notInclude(
+      [ui.get("statusline").textContent, ...ui.logs].join(" "),
+      "Private provider diagnostic text",
+    );
   });
 
   it("redacts saved and draft credentials from global error diagnostics", function () {
@@ -1198,6 +1682,97 @@ describe("AskGPT settings and image interaction", function () {
       assert.equal(cancelled, phase === "read" ? 1 : 0);
       assert.equal(released, phase === "read" ? 1 : 0);
       assert.lengthOf(ui.logs, 0);
+    }
+  });
+
+  it("sends only the current selection when the attachment has no full text", async function () {
+    const ui = harness();
+    ui.popup.refresh({
+      selection: "Original selected paragraph",
+      contextText: "",
+      session: { key: "selection-only", history: [] },
+    });
+    ui.popup.updateLiveSelection("Most recently selected paragraph");
+    await ui.popup.send("Explain the highlighted paragraph");
+    const payload = JSON.parse(ui.requests[0].body);
+    assert.include(
+      JSON.stringify(payload.messages),
+      "Most recently selected paragraph",
+    );
+    assert.notInclude(
+      JSON.stringify(payload.messages),
+      "Original selected paragraph",
+    );
+  });
+
+  it("drops explicitly cleared paper text and selection on a same-paper refresh", async function () {
+    const ui = harness();
+    const session = { key: "same-paper", history: [] };
+    ui.popup.refresh({
+      selection: "old selection",
+      contextText: "old paper",
+      session,
+    });
+    ui.popup.refresh({
+      selection: "",
+      contextText: "",
+      session: { key: session.key, history: [] },
+    });
+    await ui.popup.send("Summarize");
+    assert.isEmpty(ui.requests);
+    assert.isTrue(ui.get("focus-badge").classList.contains("hidden"));
+  });
+
+  it("preserves the last chat frame and only saves confirmed responses", async function () {
+    const delta = (text: string, reason?: string) =>
+      JSON.stringify({
+        choices: [{ delta: { content: text }, finish_reason: reason }],
+      });
+    for (const [wire, expected] of [
+      ["data: " + delta("你好", "stop"), "你好"],
+      ["data: " + delta("Done") + "\n\ndata: [DONE]", "Done"],
+      ["data: " + delta("CR only") + "\r\rdata: [DONE]\r\r", "CR only"],
+      [
+        "data: {\ndata: " + delta("Multiple lines", "stop").slice(1) + "\n\n",
+        "Multiple lines",
+      ],
+      ["data: " + delta("Partial"), ""],
+      ["data: " + delta("Limited", "length") + "\n\ndata: [DONE]\n\n", ""],
+    ]) {
+      const ui = harness();
+      ui.popup.refresh({
+        contextText: "A paper fixture.",
+        session: { key: "paper-a", history: [] },
+      });
+      const bytes = new TextEncoder().encode(wire);
+      const chunks = [bytes.slice(0, 19), bytes.slice(19)];
+      ui.setTransport(async () => ({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: async () =>
+              chunks.length
+                ? { done: false, value: chunks.shift() }
+                : { done: true },
+            cancel() {},
+          }),
+        },
+      }));
+      await ui.popup.send("Summarize.");
+      const history = ui.host.AskGPT.data.sessions["paper-a"].history;
+      const replies = history.filter(
+        (message: any) => message.role === "assistant",
+      );
+      if (expected) {
+        assert.deepEqual(
+          replies.map((message: any) => message.content),
+          [expected],
+        );
+      } else {
+        assert.isEmpty(replies);
+        assert.isNotNull(ui.doc.querySelector(".msg.assistant.incomplete"));
+        assert.include(ui.get("statusline").textContent, "未完整");
+      }
     }
   });
 
@@ -1310,6 +1885,150 @@ describe("AskGPT settings and image interaction", function () {
     assert.notInclude(ui.requests.at(-1).body, "Partial old answer.");
   });
 
+  it("keeps overlapping windows from interleaving turns in one paper conversation", async function () {
+    const first = harness();
+    const second = harness();
+    second.host.AskGPT.data.sessions = first.host.AskGPT.data.sessions;
+    const session = { key: "shared-paper", history: [] };
+    const payload = { contextText: "Shared paper.", session };
+    first.popup.refresh(payload);
+    second.popup.refresh(payload);
+    let finish!: (response: any) => void;
+    first.setTransport(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const firstTurn = first.popup.send("First question.");
+    await until(() => !!finish, "First request should be in flight");
+    await second.attach();
+    second.input("input", "Second question.");
+    try {
+      await second.popup.send();
+      assert.isEmpty(
+        second.requests,
+        "The paper already has an unfinished turn",
+      );
+      assert.equal(second.get("input").value, "Second question.");
+      assert.lengthOf(second.doc.querySelectorAll(".attachment-preview"), 1);
+    } finally {
+      finish(chatResponse());
+      await firstTurn;
+    }
+    await second.popup.send();
+    const transcript = JSON.parse(second.requests[0].body).messages;
+    assert.deepEqual(
+      transcript.slice(-3).map((m: any) => m.role),
+      ["user", "assistant", "user"],
+    );
+    assert.include(
+      second.doc.getElementById("messages")!.textContent,
+      "First question.",
+    );
+    assert.include(second.requests[0].body, "data:image/png;base64,");
+    assert.deepEqual(
+      first.host.AskGPT.data.sessions[session.key].history.map(
+        (m: any) => m.role,
+      ),
+      ["user", "assistant", "user", "assistant"],
+    );
+  });
+
+  it("keeps a cleared paper conversation empty after the frame restores its host snapshot", async function () {
+    const ui = harness();
+    const key = "reset-paper";
+    const session = {
+      key,
+      noteTarget: { itemID: 13, libraryID: 8 },
+      history: [
+        { role: "user", content: "Discarded question" },
+        { role: "assistant", content: "Discarded answer" },
+      ],
+    };
+    ui.host.AskGPT.data.sessions[key] = session;
+    ui.hostWindow.__askgptPopupState = {
+      contextText: "Current paper",
+      session,
+    };
+    ui.popup.refresh();
+    ui.click("btn-new");
+    ui.popup.refresh();
+    assert.isEmpty(ui.doc.querySelectorAll(".msg"));
+    await ui.popup.send("Fresh question");
+    assert.notInclude(ui.requests[0].body, "Discarded");
+    assert.include(ui.requests[0].body, "Current paper");
+    assert.deepEqual(
+      ui.host.AskGPT.data.sessions[key].noteTarget,
+      session.noteTarget,
+    );
+  });
+
+  it("does not let an older stream restore a paper after another window starts a new chat", async function () {
+    const first = harness();
+    const second = harness();
+    second.host.AskGPT.data.sessions = first.host.AskGPT.data.sessions;
+    const session = { key: "shared-reset", history: [] };
+    const payload = { contextText: "Shared paper.", session };
+    first.popup.refresh(payload);
+    second.popup.refresh(payload);
+    first.setTransport(() => new Promise(() => {}));
+    const pending = first.popup.send("Old question");
+    await until(
+      () => first.requests.length > 0,
+      "First turn should be pending",
+    );
+    second.click("btn-new");
+    const fresh = second.popup.send("Fresh question");
+    await Promise.all([fresh, pending]);
+    assert.isTrue(first.requests[0].signal.aborted);
+    first.emitWindow("focus", {});
+    assert.notInclude(first.get("messages").textContent, "Old question");
+    assert.include(first.get("messages").textContent, "Fresh question");
+    assert.notInclude(second.requests[0].body, "Old question");
+    assert.lengthOf(session.history, 2);
+  });
+
+  it("releases an unloading frame's paper immediately and retains its partial turn", async function () {
+    const first = harness();
+    const second = harness();
+    second.host.AskGPT.data.sessions = first.host.AskGPT.data.sessions;
+    const payload = {
+      contextText: "Shared paper.",
+      session: { key: "closing-paper", history: [] },
+    };
+    first.popup.refresh(payload);
+    second.popup.refresh(payload);
+    let reads = 0;
+    first.setTransport(async () => ({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: () =>
+            ++reads === 1
+              ? Promise.resolve({
+                  done: false,
+                  value: new TextEncoder().encode(
+                    'data: {"choices":[{"delta":{"content":"Partial answer."}}]}\n\n',
+                  ),
+                })
+              : new Promise(() => {}),
+        }),
+      },
+    }));
+    const pending = first.popup.send("First question");
+    await until(() => reads === 2, "First turn should have received its text");
+    first.emitWindow("unload", {});
+    const next = second.popup.send("Continue here");
+    await Promise.all([pending, next]);
+    assert.lengthOf(second.requests, 1);
+    assert.include(second.requests[0].body, "Partial answer.");
+    assert.deepEqual(
+      payload.session.history.map((m: any) => m.role),
+      ["user", "assistant", "user", "assistant"],
+    );
+  });
+
   it("renders each restored long answer once", function () {
     const ui = harness();
     const rendered: string[] = [];
@@ -1351,7 +2070,7 @@ describe("AskGPT settings and image interaction", function () {
     Object.defineProperty(escape, "key", { value: "Escape" });
     ui.doc.dispatchEvent(escape);
     assert.deepEqual(ui.hiddenWindows, [ui.hostWindow]);
-    ui.hostWindow.__askgptPopupState = null;
+    delete ui.hostWindow.__askgptPopupState;
     ui.popup.refresh();
     await ui.popup.send("This must not pick up the other paper.");
     assert.lengthOf(ui.requests, 1);

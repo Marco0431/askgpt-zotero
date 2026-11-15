@@ -10,7 +10,7 @@ declare namespace _ZoteroTypes {
       "baseURL": string;
       "apiKey": string;
       "model": string;
-      "temperature": number;
+      "temperature": string;
       "nativeSearch": boolean;
       "language": string;
       "contextSource": string;

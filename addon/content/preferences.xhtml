@@ -38,34 +38,19 @@
     <html:label for="askgpt-base-input" data-askgpt-l10n="pref-base"
       >API address</html:label
     >
-    <html:input
-      type="text"
-      id="askgpt-base-input"
-      preference="baseURL"
-      style="width: 300px"
-    />
+    <html:input type="text" id="askgpt-base-input" style="width: 300px" />
   </hbox>
   <hbox align="center">
     <html:label for="askgpt-key-input" data-askgpt-l10n="pref-key"
       >API key</html:label
     >
-    <html:input
-      type="password"
-      id="askgpt-key-input"
-      preference="apiKey"
-      style="width: 300px"
-    />
+    <html:input type="password" id="askgpt-key-input" style="width: 300px" />
   </hbox>
   <hbox align="center">
     <html:label for="askgpt-model-input" data-askgpt-l10n="pref-model"
       >Model</html:label
     >
-    <html:input
-      type="text"
-      id="askgpt-model-input"
-      preference="model"
-      style="width: 300px"
-    />
+    <html:input type="text" id="askgpt-model-input" style="width: 300px" />
   </hbox>
   <hbox align="center">
     <html:label for="askgpt-temp-input" data-askgpt-l10n="pref-temperature"
@@ -74,7 +59,9 @@
     <html:input
       type="number"
       id="askgpt-temp-input"
-      preference="temperature"
+      min="0"
+      max="2"
+      step="any"
       style="width: 300px"
     />
   </hbox>
@@ -82,7 +69,7 @@
     <html:label for="askgpt-web-input" data-askgpt-l10n="pref-web"
       >Provider web search</html:label
     >
-    <checkbox id="askgpt-web-input" preference="nativeSearch" native="true" />
+    <checkbox id="askgpt-web-input" native="true" />
   </hbox>
   <description data-askgpt-l10n="pref-web-hint">
     Requires Responses API web_search support and may incur provider fees.
@@ -94,12 +81,7 @@
       >System prompt (customizable)</html:h2
     ></label
   >
-  <html:textarea
-    id="askgpt-sys-input"
-    preference="systemPrompt"
-    rows="8"
-    style="width: 100%"
-  />
+  <html:textarea id="askgpt-sys-input" rows="8" style="width: 100%" />
   <hbox align="center">
     <button
       label="Save"

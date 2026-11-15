@@ -307,25 +307,34 @@
       } else if (value.type === "message" && value.role === "assistant") {
         if (value.status === "incomplete")
           throw error("native.incomplete", "incomplete");
+        if (
+          done &&
+          value.content !== undefined &&
+          !Array.isArray(value.content)
+        )
+          throw error("native.protocol", "protocol");
         for (const [index, content] of (Array.isArray(value.content)
           ? value.content
           : []
         ).entries()) {
+          if (!content || typeof content !== "object" || Array.isArray(content))
+            throw error("native.protocol", "protocol");
           const part = partFor({
             item_id: value.id,
             output_index: outputIndex,
             content_index: index,
           });
           if (content.type === "output_text") {
-            if (done && typeof content.text === "string")
+            if (done) {
+              if (typeof content.text !== "string")
+                throw error("native.protocol", "protocol");
               part.text = content.text;
+            }
             if (Array.isArray(content.annotations))
               part.annotations.push(...content.annotations);
-          } else if (
-            content.type === "refusal" &&
-            done &&
-            typeof content.refusal === "string"
-          ) {
+          } else if (content.type === "refusal" && done) {
+            if (typeof content.refusal !== "string")
+              throw error("native.protocol", "protocol");
             part.text = content.refusal;
           }
         }
@@ -394,6 +403,13 @@
         const response = value.response;
         if (
           !response ||
+          typeof response !== "object" ||
+          Array.isArray(response) ||
+          (response.output !== undefined && !Array.isArray(response.output))
+        ) {
+          throw error("native.protocol", "protocol");
+        }
+        if (
           (response.status && response.status !== "completed") ||
           response.error ||
           response.incomplete_details
@@ -495,6 +511,8 @@
           headers,
           body: JSON.stringify(body),
           signal: controller.signal,
+          credentials: "omit",
+          referrerPolicy: "no-referrer",
           redirect: "error",
         }),
       );
@@ -519,7 +537,6 @@
       reader = response.body.getReader();
       const state = parser(options);
       const decoder = new TextDecoder("utf-8", { fatal: true });
-      let buffer = "";
       let data = [];
       let eventName = "";
       function dispatch() {
@@ -544,7 +561,7 @@
         eventName = "";
       }
       function line(value) {
-        if (value.endsWith("\r")) value = value.slice(0, -1);
+        if (state.isComplete()) return;
         if (!value) {
           dispatch();
           return;
@@ -557,16 +574,14 @@
         if (field === "data") data.push(content);
         else if (field === "event") eventName = content;
       }
+      const readLines = client.createSSELineReader(line);
       while (true) {
         const chunk = await race(reader.read());
-        buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-        let newline;
-        while ((newline = buffer.indexOf("\n")) !== -1) {
-          line(buffer.slice(0, newline));
-          buffer = buffer.slice(newline + 1);
-        }
+        readLines(
+          decoder.decode(chunk.value, { stream: !chunk.done }),
+          chunk.done,
+        );
         if (chunk.done) {
-          if (buffer) line(buffer);
           dispatch();
           break;
         }

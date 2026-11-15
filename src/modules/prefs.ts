@@ -7,23 +7,55 @@ import {
   resolveInterfaceLocale,
 } from "../utils/language";
 
-let prompts: { localize(value: string, locale: string): string } | undefined;
+type PreferenceScripts = {
+  AskGPTClient: {
+    providerOrigin(base: string): string | null;
+    cleanConnectionValue(value: string): string;
+  };
+  AskGPTPrompts: { localize(value: string, locale: string): string };
+  AskGPTSettings: {
+    snapshot(prefs: typeof Zotero.Prefs): string;
+    bindProviderKey(
+      base: HTMLInputElement,
+      key: HTMLInputElement,
+    ): () => string;
+    saveConnection(
+      prefs: typeof Zotero.Prefs,
+      values: {
+        baseURL: string;
+        apiKey: string;
+        model: string;
+        temperature: string;
+      },
+      expected: string | undefined,
+    ): void;
+  };
+};
+let scripts: PreferenceScripts | undefined;
+const openForms = new WeakMap<
+  Document,
+  { snapshot: string; readKey: () => string }
+>();
 
-function localizePrompt(value: string, language: InterfaceLanguage) {
-  if (!prompts) {
-    const scope: any = { window: {} };
-    Services.scriptloader.loadSubScript(
-      `chrome://${config.addonRef}/content/scripts/prompts.js`,
-      scope,
-    );
-    prompts = scope.window.AskGPTPrompts;
+function preferenceScripts(): PreferenceScripts {
+  if (!scripts) {
+    const scope = {
+      window: {} as PreferenceScripts,
+      URL: Zotero.getMainWindow?.()?.URL ?? URL,
+    };
+    for (const name of ["prompts", "client", "settings"]) {
+      Services.scriptloader.loadSubScript(
+        `chrome://${config.addonRef}/content/scripts/${name}.js`,
+        scope,
+      );
+    }
+    scripts = scope.window;
   }
-  return prompts!.localize(value, resolveInterfaceLocale(language));
+  return scripts;
 }
 
 /**
  * 设置页注册：Zotero → 设置 → AskGPT
- * 照模板 BasicExampleFactory.registerPrefs 的模式
  */
 export function registerPrefs() {
   Zotero.PreferencePanes.register({
@@ -58,7 +90,7 @@ export function handlePrefsEvent(type: string, data: { [key: string]: any }) {
     return;
   }
   if (type === "load") {
-    // 初始化设置页字段（preference 绑定已自动读写，这里兜底）
+    // Match the reader panel's effective settings. Edits persist on Save.
     try {
       const win = data.window;
       if (!win) return;
@@ -74,6 +106,14 @@ export function handlePrefsEvent(type: string, data: { [key: string]: any }) {
         Zotero.Prefs.get(ADDN + "baseURL") || "https://api.deepseek.com",
       );
       set("askgpt-key-input", Zotero.Prefs.get(ADDN + "apiKey") || "");
+      const settings = preferenceScripts().AskGPTSettings;
+      openForms.set(doc, {
+        snapshot: settings.snapshot(Zotero.Prefs),
+        readKey: settings.bindProviderKey(
+          doc.getElementById("askgpt-base-input"),
+          doc.getElementById("askgpt-key-input"),
+        ),
+      });
       set(
         "askgpt-model-input",
         Zotero.Prefs.get(ADDN + "model") || "deepseek-chat",
@@ -106,7 +146,11 @@ function applyPrefsLanguage(doc: Document, language: InterfaceLanguage) {
   const prompt = doc.getElementById(
     "askgpt-sys-input",
   ) as HTMLTextAreaElement | null;
-  if (prompt) prompt.value = localizePrompt(prompt.value, language);
+  if (prompt)
+    prompt.value = preferenceScripts().AskGPTPrompts.localize(
+      prompt.value,
+      resolveInterfaceLocale(language),
+    );
 }
 
 /**
@@ -120,24 +164,50 @@ export function savePrefs(win: Window) {
       return el ? (el as HTMLInputElement).value : "";
     };
     const ADDN = "extensions.askgpt.";
-    const language = val("askgpt-language-input");
-    Zotero.Prefs.set(
-      ADDN + "language",
-      language === "zh-CN" || language === "en-US" ? language : "auto",
+    const choice = val("askgpt-language-input");
+    const language = choice === "zh-CN" || choice === "en-US" ? choice : "auto";
+    const { AskGPTClient: client, AskGPTSettings: settings } =
+      preferenceScripts();
+    const baseURL = client.cleanConnectionValue(val("askgpt-base-input"));
+    const model = client.cleanConnectionValue(val("askgpt-model-input"));
+    // providerOrigin checks the same endpoint builder used to issue requests.
+    const origin = client.providerOrigin(baseURL);
+    if (!origin || !model) {
+      const status = doc.getElementById("askgpt-prefs-status");
+      if (status)
+        status.textContent = getNativeString(
+          !origin ? "pref-invalid-address" : "pref-model-required",
+          language,
+        );
+      return;
+    }
+    const form = openForms.get(doc);
+    settings.saveConnection(
+      Zotero.Prefs,
+      {
+        baseURL,
+        apiKey: form?.readKey().trim() || "",
+        model,
+        temperature: val("askgpt-temp-input"),
+      },
+      form?.snapshot,
     );
-    Zotero.Prefs.set(ADDN + "baseURL", val("askgpt-base-input").trim());
-    Zotero.Prefs.set(ADDN + "apiKey", val("askgpt-key-input").trim());
-    Zotero.Prefs.set(ADDN + "model", val("askgpt-model-input").trim());
-    const t = parseFloat(val("askgpt-temp-input"));
-    if (!isNaN(t)) Zotero.Prefs.set(ADDN + "temperature", t);
+    Zotero.Prefs.set(ADDN + "language", language);
     const web = doc.getElementById("askgpt-web-input") as HTMLInputElement;
     if (web) Zotero.Prefs.set(ADDN + "nativeSearch", web.checked);
     Zotero.Prefs.set(ADDN + "systemPrompt", val("askgpt-sys-input"));
+    if (form) form.snapshot = settings.snapshot(Zotero.Prefs);
     applyPrefsLanguage(doc, getInterfaceLanguage());
     const status = doc.getElementById("askgpt-prefs-status");
     if (status) status.textContent = getNativeString("pref-saved");
     refreshNativeLanguage();
   } catch (e) {
-    Zotero.logError(new Error("AskGPT prefs save: " + e));
+    const status = win.document.getElementById("askgpt-prefs-status");
+    if ((e as Error)?.name === "StaleAskGPTSettings") {
+      if (status) status.textContent = getNativeString("pref-changed");
+      return;
+    }
+    if (status) status.textContent = getNativeString("pref-save-failed");
+    Zotero.logError(new Error("AskGPT could not save preferences"));
   }
 }

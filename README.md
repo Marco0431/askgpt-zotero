@@ -89,7 +89,7 @@ A returned model list does not guarantee that every model supports chat, images,
 
 You can also edit the core API fields under **Zotero → Settings → AskGPT**. Model discovery and connection testing are available in the reader panel. Local compatible services that require no authentication can leave the API key empty.
 
-The toolbar button shows **AskGPT** and toggles the panel; `Ctrl+K` / `Cmd+K` opens or focuses it. Opening from a separate reader window uses that reader’s paper and window.
+The **AskGPT** toolbar button toggles the panel. Press `Ctrl+K` / `Cmd+K` to open it or return to the question box. If the panel is already open in another Zotero window, either control brings it to the front. Close it first to open a panel in the other window.
 
 ## Provider web search
 
@@ -121,6 +121,8 @@ If a provider rejects image input, choose a model that supports it or remove the
 AskGPT requires desktop Zotero and an OpenAI-compatible Chat Completions endpoint for ordinary chat. Provider web search additionally requires Responses API support with the built-in `web_search` tool. Streaming, images, and search depend on the chosen provider and model. The repository's manifest sets an accepted Zotero version range; that is not a test report for every version or operating system.
 
 Available paper context, selected text, conversation history, and images you send are transmitted to the model endpoint you configure. Fetching models sends your API credentials to that endpoint; the connection test additionally sends a small test prompt. With provider web search enabled, the configured provider executes searches as part of the response. Local math rendering does not make remote model inference offline.
+
+External figures in an answer load when you click **Load external image**. Opening a citation or other web link opens it in your browser.
 
 API settings, including the key, are stored in your local Zotero preferences. The plugin does not add encryption around that stored key. Do not include your Zotero profile, credentials, or private paper text in a public issue.
 
@@ -167,4 +169,4 @@ Run `npm run check:package` after a build to verify required runtime assets and 
 
 Documentation fixes and small, focused pull requests are welcome. For larger changes, describe the use case in an issue first so the implementation can be discussed. Run the checks in [Development](#development) for code changes.
 
-Licensed under [AGPL-3.0](LICENSE). Built with [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) and [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit). The reader integration also draws on [zotero-pdf-translate](https://github.com/windingwind/zotero-pdf-translate).
+Licensed under [AGPL-3.0](LICENSE). The project started from [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template). AskGPT registers its menus and reader integration through Zotero directly. The reader integration also draws on [zotero-pdf-translate](https://github.com/windingwind/zotero-pdf-translate).

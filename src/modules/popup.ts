@@ -3,20 +3,28 @@ import { getSourceMode, readAttachmentContext } from "./fulltext";
 import { getNativeString } from "../utils/language";
 
 export type PopupOptions = { reader?: any; window?: Window };
+const PANEL_URI = "chrome://askgpt/content/popup.xhtml";
 type PanelState = {
+  window: Window;
   visible: boolean;
   loading: boolean;
   reader: any;
   generation: number;
   source: string;
+  frame?: HTMLIFrameElement;
   pending?: Promise<void>;
   cancelLoad?: () => void;
   cleanup: Array<() => void>;
 };
-const panels = new Map<Window, PanelState>();
+let panel: PanelState | undefined;
+const readerSelections = new WeakMap<object, string>();
+
+function panelFor(win: Window) {
+  return panel?.window === win ? panel : undefined;
+}
 
 export function getAskPopupState(win: Window) {
-  const state = panels.get(win);
+  const state = panelFor(win);
   return {
     visible: state?.visible || false,
     loading: state?.loading || false,
@@ -45,22 +53,37 @@ function resolvePopupTarget(options: PopupOptions) {
   return { win: win as Window, reader: reader || null };
 }
 
-function panelAPI(win: Window): any {
+/** The frame can navigate. Only its packaged document receives paper data. */
+function loadedPanelFrame(win: Window): HTMLIFrameElement | null {
   try {
-    return (
-      (win.document.getElementById("askgpt-panel-frame") as HTMLIFrameElement)
-        ?.contentWindow as any
-    )?.AskGPTPopup;
+    const frame = panelFor(win)?.frame;
+    if (frame?.isConnected && frame.contentDocument?.documentURI === PANEL_URI)
+      return frame;
   } catch (e) {
-    return null;
+    // Gecko may have detached the document while unloading the window.
   }
+  return null;
+}
+
+function panelAPI(win: Window): any {
+  return (loadedPanelFrame(win)?.contentWindow as any)?.AskGPTPopup;
+}
+
+export function updateAskPopupSelection(
+  win: Window,
+  reader: any,
+  text: string,
+) {
+  if (reader && text) readerSelections.set(reader, text);
+  const state = panelFor(win);
+  // During a source switch the iframe may still show the previous session.
+  if (state?.visible && !state.loading && state.reader === reader)
+    panelAPI(win)?.updateLiveSelection?.(text);
 }
 
 function focusPanel(win: Window) {
   try {
-    const frame = win.document.getElementById(
-      "askgpt-panel-frame",
-    ) as HTMLIFrameElement;
+    const frame = loadedPanelFrame(win);
     const input = frame?.contentDocument?.getElementById("input");
     const settings = frame?.contentDocument?.getElementById("settings");
     if (settings && !settings.classList.contains("hidden")) return;
@@ -71,19 +94,16 @@ function focusPanel(win: Window) {
 function readSelection(reader: any, host: Window) {
   if (reader) {
     try {
+      const internal = reader._internalReader;
+      const active = internal?._lastView || internal?._primaryView;
       const selected = String(
-        reader?._internalReader?._primaryView?._iframeWindow
-          ?.getSelection?.()
-          ?.toString() ||
+        active?._iframeWindow?.getSelection?.()?.toString() ||
           reader?._iframeWindow?.getSelection?.()?.toString() ||
           "",
       ).trim();
       if (selected) return selected;
     } catch (e) {}
-    return addon.data.readerSelectionItemID ===
-      (reader.itemID || reader._item?.id)
-      ? addon.data.readerSelection || ""
-      : "";
+    return readerSelections.get(reader) || "";
   }
   try {
     return (host.getSelection()?.toString() || "").trim();
@@ -95,7 +115,7 @@ function readSelection(reader: any, host: Window) {
 export async function toggleAskPopup(options: PopupOptions = {}) {
   const { win, reader } = resolvePopupTarget(options);
   if (!win) return;
-  const state = panels.get(win);
+  const state = panelFor(win);
   if (state?.visible && state.reader === reader) {
     hideAskPopup({ window: win });
     return;
@@ -120,11 +140,22 @@ export async function toggleAskPopup(options: PopupOptions = {}) {
  */
 export async function openAskPopup(options: PopupOptions = {}) {
   const { win: mainWin, reader } = resolvePopupTarget(options);
-  if (!mainWin) return;
+  if (!mainWin || mainWin.closed) return;
 
-  let state = panels.get(mainWin);
+  if (panel && panel.window !== mainWin) {
+    if (panel.visible && !panel.window.closed) {
+      const owner = panel.window;
+      if (owner.windowState === owner.STATE_MINIMIZED) owner.restore?.();
+      owner.focus();
+      focusPanel(owner);
+      return panelFor(owner)?.pending;
+    }
+    disposeAskPopup(panel.window);
+  }
+  let state = panel;
   if (!state) {
     state = {
+      window: mainWin,
       visible: false,
       loading: false,
       reader: null,
@@ -132,18 +163,23 @@ export async function openAskPopup(options: PopupOptions = {}) {
       source: "",
       cleanup: [],
     };
-    panels.set(mainWin, state);
-    // An iframe that loads before its first context must not inherit another
-    // window's compatibility snapshot from addon.data.popupState.
+    panel = state;
+    // A new panel starts without context until its own window publishes it.
     (mainWin as any).__askgptPopupState = null;
   }
   const wasVisible = state.visible;
   const pane: any = (mainWin as any).ZoteroPane;
+  const selectedItem = reader ? null : pane?.getSelectedItems?.()?.[0];
+  const readerID = reader?.itemID || reader?._item?.id;
+  const origin = reader
+    ? reader._item || (readerID && Zotero.Items.get(readerID))
+    : selectedItem;
+  const noteTarget = origin?.id
+    ? { itemID: origin.id, libraryID: origin.libraryID }
+    : null;
   const source = JSON.stringify([
-    reader?.itemID || reader?._item?.id || null,
-    reader
-      ? []
-      : (pane?.getSelectedItems?.() || []).map((item: any) => item.id),
+    readerID || selectedItem?.id || null,
+    origin?.libraryID || null,
     getSourceMode(),
   ]);
   const sameSource = state.source === source && state.reader === reader;
@@ -177,9 +213,7 @@ export async function openAskPopup(options: PopupOptions = {}) {
   panelAPI(mainWin)?.cancelRequests?.();
   publishPanelState(mainWin);
   const isCurrent = () =>
-    panels.get(mainWin) === current &&
-    current.generation === generation &&
-    current.visible;
+    panel === current && current.generation === generation && current.visible;
   const cancelled = new Promise<null>((resolve) => {
     current.cancelLoad = () => resolve(null);
   });
@@ -203,23 +237,21 @@ export async function openAskPopup(options: PopupOptions = {}) {
 
       // 3) 读整篇文献（PDF 全文 / HTML 译文 / Markdown 源）
       const ctx = await Promise.race([
-        readAttachmentContext({ reader, window: mainWin }),
+        readAttachmentContext({ reader, window: mainWin, selectedItem }),
         cancelled,
       ]);
       if (!isCurrent()) return;
       selection = readSelection(reader, mainWin);
       const contextText = ctx ? ctx.text : "";
       const contextLabel = ctx ? ctx.label : "";
-      const contextPath = ctx ? ctx.path : "";
       const contextChars = ctx ? ctx.chars : 0;
       const truncated = ctx ? ctx.truncated : false;
       const itemTitle =
         (ctx && ctx.title) || reader?._item?.getField?.("title") || "";
-      if (itemTitle) addon.data.readerTitle = itemTitle;
 
       // 4) 会话 key：同一篇文献始终同一个会话（换选中段落不清空历史）
-      const sessionKey = contextPath
-        ? "file:" + contextPath
+      const sessionKey = ctx
+        ? JSON.stringify([ctx.libraryID, ctx.attachmentID, ctx.path])
         : "source:" + source;
 
       const g: any = (Zotero as any)[config.addonInstance];
@@ -240,6 +272,7 @@ export async function openAskPopup(options: PopupOptions = {}) {
         session.base = null;
       }
       session.selection = selection;
+      session.noteTarget = noteTarget;
       session.itemTitle = itemTitle;
       session.chars = contextChars;
       session.truncated = truncated;
@@ -272,10 +305,7 @@ export async function openAskPopup(options: PopupOptions = {}) {
         session: null,
       });
     } finally {
-      if (
-        panels.get(mainWin) === current &&
-        current.generation === generation
-      ) {
+      if (panel === current && current.generation === generation) {
         current.pending = undefined;
         current.cancelLoad = undefined;
         current.loading = false;
@@ -295,15 +325,13 @@ function ensurePanel(mainWin: Window) {
   const PANEL_PREF = "extensions.askgpt.panelPos";
   const SIZE_PREF = "extensions.askgpt.panelSize";
   const doc: any = (mainWin as any).document;
-  const state = panels.get(mainWin)!;
+  const state = panelFor(mainWin)!;
   const listen = (target: any, type: string, handler: any) => {
     target.addEventListener(type, handler);
     state.cleanup.push(() => target.removeEventListener(type, handler));
   };
-  const frame = doc.getElementById(
-    "askgpt-panel-frame",
-  ) as HTMLIFrameElement | null;
-  let wrap = doc.getElementById("askgpt-panel-wrap") as HTMLDivElement;
+  const frame = state.frame;
+  let wrap = frame?.parentElement as HTMLDivElement;
 
   // 面板尺寸可配置（设置里改完保存会立即改 iframe；这里兜底/应用外部改动）
   const size = readPanelSize(SIZE_PREF, mainWin);
@@ -376,7 +404,8 @@ function ensurePanel(mainWin: Window) {
   // iframe 内容区（懒加载：src 设置后浏览器异步加载，不阻塞面板显示）
   const panel = doc.createElement("iframe");
   panel.id = "askgpt-panel-frame";
-  panel.src = "chrome://askgpt/content/popup.xhtml";
+  state.frame = panel;
+  panel.src = PANEL_URI;
   panel.setAttribute(
     "style",
     "width:" +
@@ -409,10 +438,7 @@ function ensurePanel(mainWin: Window) {
     lastSize = { w, h };
     // 主动通知面板重新判定布局适配档位（不依赖 iframe 自身 resize 事件）
     try {
-      const iw: any = panel.contentWindow;
-      if (iw && iw.AskGPTPopup && iw.AskGPTPopup.notifyPanelSize) {
-        iw.AskGPTPopup.notifyPanelSize(w, h);
-      }
+      panelAPI(mainWin)?.notifyPanelSize?.(w, h);
     } catch (e) {}
   };
 
@@ -542,11 +568,8 @@ function ensurePanel(mainWin: Window) {
     try {
       const ps = (mainWin as any).__askgptPopupState;
       if (!ps) return;
-      const iw = panel.contentWindow as any;
-      if (iw && iw.AskGPTPopup && iw.AskGPTPopup.refresh) {
-        iw.AskGPTPopup.refresh(ps);
-        if (state.visible) focusPanel(mainWin);
-      }
+      panelAPI(mainWin)?.refresh?.(ps);
+      if (state.visible) focusPanel(mainWin);
     } catch (e) {}
   });
 
@@ -743,20 +766,14 @@ function ensurePanelStyle(doc: any) {
   } catch (e) {}
 }
 
-/** 把状态同时存到 addon.data.popupState 并推给面板 iframe（幂等） */
+/** Keep the latest snapshot in the owning window for the panel's first load. */
 function pushPanel(mainWin: Window, payload: any) {
-  (mainWin as any).__askgptPopupState = payload;
-  const g: any = (Zotero as any)[config.addonInstance];
-  g.data.popupState = payload;
+  const state = panelFor(mainWin);
+  if (!state) return;
+  const snapshot = { ...payload, source: state.source };
+  (mainWin as any).__askgptPopupState = snapshot;
   try {
-    const panel = (mainWin as any).document.getElementById(
-      "askgpt-panel-frame",
-    ) as HTMLIFrameElement | null;
-    if (!panel) return;
-    const iw: any = panel.contentWindow;
-    if (iw && iw.AskGPTPopup && iw.AskGPTPopup.refresh) {
-      iw.AskGPTPopup.refresh(payload);
-    }
+    panelAPI(mainWin)?.refresh?.(snapshot);
   } catch (e) {}
 }
 
@@ -767,19 +784,16 @@ export function hideAskPopup(options: PopupOptions = {}) {
   try {
     const { win: mainWin } = resolvePopupTarget(options);
     if (!mainWin) return;
-    const state = panels.get(mainWin);
-    if (state) {
-      state.visible = false;
-      state.loading = false;
-      state.generation++;
-      state.pending = undefined;
-      state.cancelLoad?.();
-      state.cancelLoad = undefined;
-    }
+    const state = panelFor(mainWin);
+    if (!state) return;
+    state.visible = false;
+    state.loading = false;
+    state.generation++;
+    state.pending = undefined;
+    state.cancelLoad?.();
+    state.cancelLoad = undefined;
     panelAPI(mainWin)?.cancelRequests?.();
-    const wrap = mainWin.document.getElementById(
-      "askgpt-panel-wrap",
-    ) as HTMLElement | null;
+    const wrap = state?.frame?.parentElement as HTMLElement | null;
     if (wrap) wrap.style.display = "none";
     publishPanelState(mainWin);
   } catch (e) {}
@@ -787,21 +801,21 @@ export function hideAskPopup(options: PopupOptions = {}) {
 
 /** Remove host listeners and DOM when a window or the plugin is unloaded. */
 export function disposeAskPopup(win?: Window) {
-  for (const target of win ? [win] : [...panels.keys()]) {
-    hideAskPopup({ window: target });
-    const state = panels.get(target);
-    for (const cleanup of state?.cleanup || []) {
-      try {
-        cleanup();
-      } catch (e) {}
-    }
-    panels.delete(target);
+  const state = panel;
+  if (!state || (win && state.window !== win)) return;
+  const target = state.window;
+  hideAskPopup({ window: target });
+  panel = undefined;
+  for (const cleanup of state.cleanup) {
     try {
-      delete (target as any).__askgptPopupState;
-      target.document.getElementById("askgpt-panel-wrap")?.remove();
-      target.document.getElementById("askgpt-panel-style")?.remove();
-    } catch (e) {
-      // A closing native window may already have detached its document.
-    }
+      cleanup();
+    } catch (e) {}
+  }
+  try {
+    delete (target as any).__askgptPopupState;
+    state?.frame?.parentElement?.remove();
+    target.document.getElementById("askgpt-panel-style")?.remove();
+  } catch (e) {
+    // A closing native window may already have detached its document.
   }
 }

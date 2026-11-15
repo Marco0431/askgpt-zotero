@@ -10,7 +10,9 @@ const archive = new AdmZip(path.join(root, ".scaffold/build/askgpt.xpi"));
 const files = archive.getEntries().filter((entry) => !entry.isDirectory);
 const names = new Set(files.map((entry) => entry.entryName));
 const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+const notices = "content/vendor/THIRD-PARTY-NOTICES.txt";
 const required = [
+  "LICENSE",
   "bootstrap.js",
   "manifest.json",
   "prefs.js",
@@ -20,16 +22,24 @@ const required = [
   "content/scripts/client.js",
   "content/scripts/i18n.js",
   "content/scripts/native-search.js",
+  "content/scripts/popup.js",
+  "content/scripts/settings.js",
   "content/scripts/prompts.js",
   "content/scripts/mathrender.js",
   "content/vendor/markdown-it.min.js",
   "content/vendor/katex/katex.min.js",
   "content/vendor/katex/katex.min.css",
+  notices,
   "locale/en-US/askgpt-preferences.ftl",
   "locale/zh-CN/askgpt-preferences.ftl",
 ];
 for (const name of required)
   assert.ok(names.has(name), `Missing runtime asset: ${name}`);
+assert.equal(
+  archive.readAsText(notices),
+  readFileSync(path.join(root, "addon", notices), "utf8"),
+  "The XPI must include the full third-party notices",
+);
 const manifest = JSON.parse(archive.readAsText("manifest.json"));
 assert.equal(
   manifest.version,
@@ -45,7 +55,7 @@ for (const entry of files) {
   const name = entry.entryName;
   assert.match(
     name,
-    /^(bootstrap\.js|manifest\.json|prefs\.js|content\/[^.].*|locale\/[^.].*)$/,
+    /^(LICENSE|bootstrap\.js|manifest\.json|prefs\.js|content\/[^.].*|locale\/[^.].*)$/,
     `Unexpected package entry: ${name}`,
   );
   assert.doesNotMatch(
@@ -53,9 +63,23 @@ for (const entry of files) {
     /(^|\/)(tests?|scripts\/test|node_modules|\.scaffold|src)(\/|$)|\.(test|spec)\.|\.(ts|tsx|map)$/i,
     `Development file leaked into XPI: ${name}`,
   );
+  if (name.endsWith(".xhtml")) {
+    const markup = entry.getData().toString("utf8");
+    for (const [, asset] of markup.matchAll(
+      /(?:src|href)="chrome:\/\/askgpt\/([^"#]+)"/g,
+    )) {
+      assert.ok(names.has(asset), `Missing resource ${asset} used by ${name}`);
+    }
+  }
   if (name.endsWith(".js")) {
+    const script = entry.getData().toString("utf8");
     assert.doesNotMatch(
-      entry.getData().toString("utf8"),
+      script,
+      /zotero:\/\/(?:ztoolkit-debug|plugin)\b/i,
+      `Toolkit debug or plugin-install protocol in release script: ${name}`,
+    );
+    assert.doesNotMatch(
+      script,
       /registerFulltextTests|registerPanelHostTests|__askgptTestEnvironment|PRIVATE_HISTORY_SENTINEL/,
       `Test implementation leaked into ${name}`,
     );

@@ -95,6 +95,7 @@ AskGPT is a Zotero plugin for asking questions about research papers without lea
   - 同一篇文献的其它附件依次兜底（PDF / Markdown / HTML / TXT）；某一路读不到文字（比如扫描版 PDF）会自动换下一路
   - PDF 优先使用新鲜且完整的 Zotero 全文索引；索引不完整或已过期时尝试重新抽取。只能取得部分文本时会标记不完整
   - HTML 译文里的 KaTeX 公式会还原成原始 LaTeX（`$...$` / `$$...$$`）；读不到全文时会明确提示「本次只发送选中段落」
+- 回答中的外部图片在点击「加载外部图片」后加载，网页链接会在浏览器中打开。
 - **真·Markdown + KaTeX 渲染**（随插件离线打包 `markdown-it` + `KaTeX`，不联网）：
   - 标题 / 表格 / 引用 / 删除线 / 有序无序列表 / 代码块 / 链接全部真渲染
   - 行内公式 `$...$`、`\(...\)`，块级公式 `$$...$$`、`\[...\]` 用 KaTeX 排版
@@ -118,7 +119,7 @@ AskGPT is a Zotero plugin for asking questions about research papers without lea
 - AI 气泡宽度用满面板（不再留 12% 空白），公式、表格在气泡里正常排版
 - **字号可调**：设置 → 字体大小（12 / 13 / 14 / 15 / 16 / 18 px，默认 14），保存后立即生效，无需重启
 - **⚙ 设置按钮在输入框旁边**；设置在独立覆盖面板中打开。点击「保存并返回」才会应用改动；点击「取消」、右上角 `✕` 或按 `Esc` 会丢弃未保存输入，恢复已保存配置并返回对话（不会隐藏整个 AskGPT 面板）
-- 工具栏显示 **AskGPT**，单击打开、再次单击关闭；`Ctrl+K` / `Cmd+K` 打开或聚焦面板。独立阅读器窗口使用该窗口正在阅读的文献。
+- 工具栏的 **AskGPT** 按钮单击打开，再次单击收起。`Ctrl+K` / `Cmd+K` 打开面板或回到提问框。如果面板已经在另一个 Zotero 窗口打开，快捷键和按钮都会将它带到前台。收起后，可以在当前窗口的论文里打开。
 - `Esc` 或标题栏 ✕ 隐藏面板，`Ctrl+K` 再次唤起
 
 ### ⚙️ 连接、外观与高级设置
@@ -250,7 +251,7 @@ addon/
 ## 🧩 技术亮点
 
 - 🎯 官方 `Zotero.Reader.registerEventListener` 捕获 PDF 选中（`renderTextSelectionPopup`），实时推送面板
-- 📦 基于 [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template)（windingwind 官方模板）+ [zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit)
+- 📦 项目从 [zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) 起步，目前通过 Zotero 原生接口注册菜单和阅读器功能。
 - 🔌 普通问答使用 OpenAI 风格的 Chat Completions 接口；提供商联网搜索要求支持 Responses API 的内置 `web_search`，实际能力取决于所选接口与模型
 - 📝 插件不内置模型服务；文献上下文发往你配置的接口，启用联网搜索后由该提供商执行搜索
 
@@ -259,7 +260,7 @@ addon/
 ## 🙏 致谢
 
 - [windingwind/zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) —— 插件开发模板
-- [windingwind/zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit) —— 工具库
+- [windingwind/zotero-plugin-toolkit](https://github.com/windingwind/zotero-plugin-toolkit) —— 早期版本使用的工具库
 - [zotero-pdf-translate](https://github.com/windingwind/zotero-pdf-translate) —— Reader API 参考
 
 ---

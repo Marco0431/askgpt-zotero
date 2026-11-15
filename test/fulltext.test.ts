@@ -225,6 +225,37 @@ export function registerFulltextTests(
       assert.equal((await f.read(html)).path, md.getFilePath());
     });
 
+    it("finds a readable attachment after a paper's supplementary files", async function () {
+      const f = fixture();
+      const supplements = Array.from({ length: 30 }, (_, index) =>
+        f.attachment(index + 1, "csv"),
+      );
+      const pdf = f.attachment(31);
+      const paper = f.parent(100, [...supplements, pdf]);
+      const result = await f.module.readAttachmentContext({
+        reader: null,
+        selectedItem: paper,
+      });
+      assert.equal(result?.attachmentID, pdf.id);
+      assert.deepEqual(f.extractions, [pdf.id]);
+    });
+
+    it("skips unsupported supplementary formats before reading their contents", async function () {
+      const f = fixture();
+      const archive = f.attachment(1, "zip", "Archive fixture");
+      const supplement = f.attachment(2, "constructor", "Supplement fixture");
+      assert.isNull(await f.read(archive));
+      assert.isNull(await f.read(supplement));
+      const text = f.attachment(3, "txt", "Paper body");
+      const paper = f.parent(10, [archive, supplement, text]);
+      const result = await f.module.readAttachmentContext({
+        reader: null,
+        selectedItem: paper,
+      });
+      assert.equal(result?.attachmentID, text.id);
+      assert.deepEqual(f.reads, [text.getFilePath()]);
+    });
+
     it("coalesces concurrent PDF extraction and reuses an unchanged file afterward", async function () {
       const f = fixture();
       const pdf = f.attachment(1);
@@ -378,6 +409,78 @@ export function registerFulltextTests(
       f.extract(() => ({ text: "Fresh read" }));
       assert.equal((await f.read(pdf)).text, "Fresh read");
       assert.lengthOf(f.extractions, 2);
+    });
+
+    it("honors a cache clear while the source attachment is being resolved", async function () {
+      const f = fixture();
+      const pdf = f.attachment(1);
+      const pending = f.read(pdf);
+      f.module.clearFullTextCache();
+      await pending;
+      assert.equal(f.module._internal.cacheSize(), 0);
+      assert.isEmpty(f.extractions);
+    });
+
+    it("avoids restarting extraction after shutdown when the file has also changed", async function () {
+      const f = fixture();
+      const pdf = f.attachment(1);
+      const old = deferred();
+      f.extract(() => old.promise);
+      const pending = f.read(pdf);
+      await until(() => f.extractions.length === 1);
+      f.module.clearFullTextCache();
+      f.files.set(pdf.getFilePath(), { text: "New file", modified: 200 });
+      old.resolve({ text: "Previous text" });
+      await pending;
+      assert.lengthOf(f.extractions, 1);
+      assert.equal(f.module._internal.cacheSize(), 0);
+    });
+
+    it("settles concurrent reads when a file is changed and then restored", async function () {
+      const f = fixture();
+      const pdf = f.attachment(1);
+      const path = pdf.getFilePath();
+      const original = f.files.get(path)!;
+      const first = deferred();
+      const second = deferred();
+      f.extract(() => first.promise);
+      const firstRead = f.read(pdf);
+      await until(() => f.extractions.length === 1);
+      f.files.set(path, { text: "Revised PDF bytes", modified: 200 });
+      f.extract(() => second.promise);
+      const secondRead = f.read(pdf);
+      await until(() => f.extractions.length === 2);
+      first.resolve({ text: "Original document" });
+      // Allow the first caller to retry against the in-flight revised version.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      f.files.set(path, original);
+      f.extract(() => ({ text: "Restored document" }));
+      second.resolve({ text: "Revised document" });
+      let finished = false;
+      const results = Promise.all([firstRead, secondRead]).then((values) => {
+        finished = true;
+        return values;
+      });
+      await until(() => finished);
+      const [a, b] = await results;
+      assert.oneOf(a?.text ?? null, [null, "Restored document"]);
+      assert.equal(b?.text, "Restored document");
+    });
+
+    it("keeps oversized text within the character budget without splitting a Unicode character", async function () {
+      const f = fixture();
+      const limit = f.module._internal.MAX_CHARS;
+      for (const [index, prefix] of ["", "a"].entries()) {
+        const item = f.attachment(
+          index + 1,
+          "txt",
+          prefix + "😀".repeat(limit),
+        );
+        const context = await f.read(item);
+        assert.isTrue(context.truncated);
+        assert.isAtMost(context.chars, limit);
+        assert.notMatch(context.text.split("\n\n")[0], /[\uD800-\uDBFF]$/);
+      }
     });
 
     it("retries a file changed during extraction without overwriting its newer result", async function () {
