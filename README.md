@@ -3,7 +3,7 @@
 # AskGPT — AI Paper Reader for Zotero
 
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
+[![Release](https://flat.badgen.net/github/release/Marco0431/askgpt-zotero/stable)](https://github.com/Marco0431/askgpt-zotero/releases/latest)
 [![Zotero Plugins grade](https://zoteroplugins.org/badge/askgpt-zotero.svg)](https://zoteroplugins.org/p/askgpt-zotero)
 [![Listed in the Zotero Chinese Community plugin store](https://zotero-chinese.com/badges/listed.svg)](https://zotero-chinese.com/plugins/#search=AskGPT)
 
