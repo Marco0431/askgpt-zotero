@@ -9,6 +9,7 @@
 [![Zotero](https://img.shields.io/badge/Zotero-Desktop-blue?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](../LICENSE)
 [![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
+[![Zotero Plugins 评级](https://zoteroplugins.org/badge/askgpt-zotero.svg)](https://zoteroplugins.org/p/askgpt-zotero)
 
 **从这里开始：**[安装并完成第一次提问](#快速开始) · [常见问题](#常见问题) · [数据与费用](#数据与费用)
 
