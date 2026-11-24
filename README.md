@@ -8,6 +8,7 @@ AskGPT adds a question-and-answer panel to the Zotero reader. Select a passage, 
 
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
+[![Zotero Plugins grade](https://zoteroplugins.org/badge/askgpt-zotero.svg)](https://zoteroplugins.org/p/askgpt-zotero)
 
 **Start here:** [Install and ask your first question](#install-and-try) · [API setup](#set-up-your-model-connection) · [Troubleshooting](#troubleshooting) · [Data flow](#requirements-and-data-flow)
 
