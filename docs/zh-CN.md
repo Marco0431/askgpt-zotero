@@ -2,14 +2,15 @@
 
 # AskGPT — Zotero AI 文献阅读助手
 
-> 在 Zotero 里选中论文段落，按 `Ctrl+K` 提问：结合文献全文解释概念、翻译段落，并把回答保存为 Zotero 笔记。
-
-[下载 askgpt.xpi](https://github.com/Marco0431/askgpt-zotero/releases/latest/download/askgpt.xpi) · [问题反馈](https://github.com/Marco0431/askgpt-zotero/issues) · [文档索引](../llms.txt)
-
 [![Zotero](https://img.shields.io/badge/Zotero-Desktop-blue?style=flat-square&logo=zotero&logoColor=CC2936)](https://www.zotero.org)
 [![License](https://img.shields.io/badge/License-AGPL--3.0-green.svg?style=flat-square)](../LICENSE)
 [![Release](https://img.shields.io/github/v/release/Marco0431/askgpt-zotero?style=flat-square)](https://github.com/Marco0431/askgpt-zotero/releases)
 [![Zotero Plugins 评级](https://zoteroplugins.org/badge/askgpt-zotero.svg)](https://zoteroplugins.org/p/askgpt-zotero)
+[![Zotero 中文社区 · 已收录](https://zotero-chinese.com/badges/listed.svg)](https://zotero-chinese.com/plugins/#search=AskGPT)
+
+> 在 Zotero 里选中论文段落，按 `Ctrl+K` 提问：结合文献全文解释概念、翻译段落，并把回答保存为 Zotero 笔记。
+
+[下载 askgpt.xpi](https://github.com/Marco0431/askgpt-zotero/releases/latest/download/askgpt.xpi) · [问题反馈](https://github.com/Marco0431/askgpt-zotero/issues) · [文档索引](../llms.txt)
 
 **从这里开始：**[安装并完成第一次提问](#快速开始) · [常见问题](#常见问题) · [数据与费用](#数据与费用)
 
